@@ -26,8 +26,8 @@ migrations_dir = "migrations"
 
 [vars]
 # Comma-separated GitHub usernames allowed to use this server.
-# Leave empty to allow any GitHub account that completes OAuth.
-GITHUB_ALLOWED_USERS = ""
+# Hanya harvey-moeid yang diizinkan masuk.
+GITHUB_ALLOWED_USERS = "harvey-moeid"
 
 # Comma-separated branches that push_files/delete_file cannot write to directly.
 # Forces the create_branch -> push_files -> create_pull_request -> merge_pull_request flow.
