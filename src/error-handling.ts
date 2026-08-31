@@ -1,5 +1,6 @@
 import { RequestError } from 'octokit'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import { CloudflareApiError } from './cloudflare'
 
 /**
  * Wraps a tool handler so any thrown error becomes a clean MCP error result
@@ -33,6 +34,19 @@ function describeError(err: unknown): string {
         return `GitHub rejected the request as invalid (422): ${extractGithubMessage(err) ?? 'check the parameters you passed.'}`
       default:
         return `GitHub API error (${err.status}): ${extractGithubMessage(err) ?? err.message}`
+    }
+  }
+
+  if (err instanceof CloudflareApiError) {
+    switch (err.status) {
+      case 401:
+        return 'Cloudflare rejected the request (401): CLOUDFLARE_API_TOKEN is missing, invalid, or expired.'
+      case 403:
+        return `Cloudflare denied this action (403): ${err.message || 'the token is missing the required permission (Workers Scripts:Read).'}`
+      case 404:
+        return 'Cloudflare returned 404 — check the Worker script name and CLOUDFLARE_ACCOUNT_ID.'
+      default:
+        return `Cloudflare API error (${err.status}): ${err.message}`
     }
   }
 

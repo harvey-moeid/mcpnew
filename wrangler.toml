@@ -47,3 +47,5 @@ custom_domain = true
 #   GITHUB_CLIENT_ID
 #   GITHUB_CLIENT_SECRET
 #   COOKIE_ENCRYPTION_KEY
+#   CLOUDFLARE_API_TOKEN     <- used by get_worker_deployment_status (src/cloudflare.ts)
+#   CLOUDFLARE_ACCOUNT_ID    <- used by get_worker_deployment_status (src/cloudflare.ts)
