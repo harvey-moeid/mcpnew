@@ -40,7 +40,7 @@ ALLOW_DIRECT_PUSH_TO_PROTECTED = "false"
 enabled = true
 
 [[routes]]
-pattern = "mcpnew.muidsoft.com/*"
+pattern = "mcpnew.muidsoft.com"
 custom_domain = true
 
 # Secrets (set via `wrangler secret put`, never committed):
