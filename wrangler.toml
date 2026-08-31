@@ -39,6 +39,10 @@ ALLOW_DIRECT_PUSH_TO_PROTECTED = "false"
 [observability]
 enabled = true
 
+[[routes]]
+pattern = "mcpnew.muidsoft.com/*"
+custom_domain = true
+
 # Secrets (set via `wrangler secret put`, never committed):
 #   GITHUB_CLIENT_ID
 #   GITHUB_CLIENT_SECRET
