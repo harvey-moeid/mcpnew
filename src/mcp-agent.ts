@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { withErrorHandling } from './error-handling'
 import { withAudit } from './audit-log'
 import { assertBranchWritable } from './guardrails'
+import { getWorkerDeployments } from './cloudflare'
 
 /**
  * Props injected by the OAuth flow in github-handler.ts once the user has
@@ -21,7 +22,7 @@ export type GitHubProps = {
 export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
   server = new McpServer({
     name: 'GitHub Ops MCP Server',
-    version: '1.2.0',
+    version: '1.3.0',
   })
 
   private octokit(): Octokit {
@@ -181,7 +182,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       })
     )
 
-    // ── NEW: list_pull_requests ───────────────────────────────────────────
+    // —— NEW: list_pull_requests ————————————————————————————————
     this.server.registerTool(
       'list_pull_requests',
       {
@@ -215,7 +216,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       })
     )
 
-    // ── NEW: get_pull_request ─────────────────────────────────────────────
+    // —— NEW: get_pull_request —————————————————————————————————
     this.server.registerTool(
       'get_pull_request',
       {
@@ -249,7 +250,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       })
     )
 
-    // ── NEW: search_code ──────────────────────────────────────────────────
+    // —— NEW: search_code ———————————————————————————————————————
     this.server.registerTool(
       'search_code',
       {
@@ -284,7 +285,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       })
     )
 
-    // ── NEW: wait_for_workflow ────────────────────────────────────────────
+    // —— NEW: wait_for_workflow ———————————————————————————————
     this.server.registerTool(
       'wait_for_workflow',
       {
@@ -365,6 +366,60 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
           }],
           isError: true,
         }
+      })
+    )
+
+    // —— NEW: get_worker_deployment_status (Cloudflare) ——————————————
+    this.server.registerTool(
+      'get_worker_deployment_status',
+      {
+        description:
+          'Check the current deployment status of a Cloudflare Worker: which version is live, ' +
+          'the rollout strategy/percentage (for gradual deployments), and when it was last deployed. ' +
+          'Reads directly from the Cloudflare API — separate from GitHub Actions workflow status. ' +
+          'Requires CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets to be set on this Worker.',
+        inputSchema: {
+          script_name: z
+            .string()
+            .default('github-mcp-server')
+            .describe('Name of the Cloudflare Worker script to check, e.g. "github-mcp-server"'),
+        },
+        annotations: {
+          title: 'Get Worker deployment status',
+          readOnlyHint: true,
+          openWorldHint: true,
+        },
+      },
+      withErrorHandling(async ({ script_name }) => {
+        const { deployments } = await getWorkerDeployments(this.env, script_name)
+
+        if (deployments.length === 0) {
+          return {
+            content: [{ type: 'text', text: `No deployments found for Worker "${script_name}".` }],
+          }
+        }
+
+        const latest = deployments[0]
+        const versionLines = (latest.versions ?? [])
+          .map((v) => {
+            const pct = v.percentage != null ? ` (${v.percentage}%)` : ''
+            const tag = v.tag ? ` [${v.tag}]` : ''
+            const msg = v.message ? `: ${v.message}` : ''
+            return `  - ${v.version_id}${pct}${tag}${msg}`
+          })
+          .join('\n')
+
+        const text =
+          `Worker         : ${script_name}\n` +
+          `Latest deploy  : ${latest.id}\n` +
+          `Strategy       : ${latest.strategy ?? 'unknown'}\n` +
+          `Deployed at    : ${latest.created_on ?? 'unknown'}\n` +
+          `Triggered by   : ${latest.author_email ?? 'unknown'}\n` +
+          `Source         : ${latest.source ?? 'unknown'}\n` +
+          (versionLines ? `Versions live  :\n${versionLines}\n` : '') +
+          `\n(${deployments.length} deployment(s) on record)`
+
+        return { content: [{ type: 'text', text }] }
       })
     )
 
