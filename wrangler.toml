@@ -15,13 +15,13 @@ new_sqlite_classes = ["MyMCP"]
 # KV namespace required by @cloudflare/workers-oauth-provider (must be named OAUTH_KV).
 [[kv_namespaces]]
 binding = "OAUTH_KV"
-id = "REPLACE_WITH_OAUTH_KV_ID"
+id = "e585b71dbef14a049c3c785d7ff1b368"
 
 # D1 database for the audit log (every write/destructive tool call is recorded here).
 [[d1_databases]]
 binding = "AUDIT_DB"
 database_name = "github-mcp-audit-log"
-database_id = "REPLACE_WITH_AUDIT_DB_ID"
+database_id = "d5d8057f-6be6-4d8d-bfc6-56006dd39ffc"
 migrations_dir = "migrations"
 
 [vars]
