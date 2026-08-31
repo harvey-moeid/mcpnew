@@ -1,0 +1,45 @@
+name = "github-mcp-server"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Durable Object that backs the MCP session (McpAgent).
+[[durable_objects.bindings]]
+name = "MCP_OBJECT"
+class_name = "MyMCP"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MyMCP"]
+
+# KV namespace required by @cloudflare/workers-oauth-provider (must be named OAUTH_KV).
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "REPLACE_WITH_OAUTH_KV_ID"
+
+# D1 database for the audit log (every write/destructive tool call is recorded here).
+[[d1_databases]]
+binding = "AUDIT_DB"
+database_name = "github-mcp-audit-log"
+database_id = "REPLACE_WITH_AUDIT_DB_ID"
+migrations_dir = "migrations"
+
+[vars]
+# Comma-separated GitHub usernames allowed to use this server.
+# Leave empty to allow any GitHub account that completes OAuth.
+GITHUB_ALLOWED_USERS = ""
+
+# Comma-separated branches that push_files/delete_file cannot write to directly.
+# Forces the create_branch -> push_files -> create_pull_request -> merge_pull_request flow.
+PROTECTED_BRANCHES = "main,master"
+
+# Set to "true" to disable the protected-branch guardrail (not recommended for shared repos).
+ALLOW_DIRECT_PUSH_TO_PROTECTED = "false"
+
+[observability]
+enabled = true
+
+# Secrets (set via `wrangler secret put`, never committed):
+#   GITHUB_CLIENT_ID
+#   GITHUB_CLIENT_SECRET
+#   COOKIE_ENCRYPTION_KEY
