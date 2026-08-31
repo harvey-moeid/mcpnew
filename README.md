@@ -1,13 +1,13 @@
 # GitHub Ops MCP Server
 
 Remote MCP server (Cloudflare Worker) yang memberi Claude akses untuk membuat repo,
-push commit, buka pull request, dan membaca file — **lewat akun GitHub kamu sendiri
-via OAuth**, bukan lewat Personal Access Token yang ditempel di chat.
+push commit, buka pull request, dan membaca file — lewat akun GitHub kamu sendiri
+via OAuth, bukan lewat Personal Access Token yang ditempel di chat.
 
 ## Cara Kerja
 
 1. Kamu tambahkan server ini sebagai **custom connector** di Claude
-2. Saat pertama connect, Claude membuka layar consent → kamu klik "Continue with GitHub"
+2. Saat pertama connect, Claude membuka layar consent — kamu klik "Continue with GitHub"
 3. Kamu login/approve di GitHub (flow OAuth standar, sama seperti "Login with GitHub" di aplikasi lain)
 4. Server ini menyimpan token GitHub kamu **terenkripsi di dalam access token OAuth**
    yang dipegang Claude — bukan disimpan sebagai teks di server, dan tidak pernah
@@ -57,6 +57,25 @@ npx wrangler secret put COOKIE_ENCRYPTION_KEY   # generate dengan: openssl rand 
 (Opsional) Batasi server ini hanya bisa dipakai akun GitHub tertentu — edit `GITHUB_ALLOWED_USERS`
 di `wrangler.toml`, isi username GitHub dipisah koma, misal `"username1,username2"`.
 
+### 3b. (Opsional) Aktifkan `get_worker_deployment_status` (Cloudflare)
+
+Tool ini mengecek status deploy Worker langsung dari Cloudflare API (versi yang live,
+strategi rollout/persentase gradual deployment, kapan terakhir deploy) — terpisah dari
+status GitHub Actions workflow.
+
+1. Buat API Token: Cloudflare Dashboard → **My Profile → API Tokens → Create Token**
+   → gunakan template **"Edit Cloudflare Workers"** atau buat custom token dengan minimal
+   permission **Account → Workers Scripts → Read**
+2. Catat **Account ID** (terlihat di sidebar kanan halaman overview domain/account Cloudflare)
+3. Set sebagai secret di Worker ini (bukan cuma di GitHub Actions):
+   ```bash
+   npx wrangler secret put CLOUDFLARE_API_TOKEN
+   npx wrangler secret put CLOUDFLARE_ACCOUNT_ID
+   ```
+
+Tanpa dua secret ini, tool `get_worker_deployment_status` akan menolak jalan dengan
+pesan error yang jelas (bukan crash), tool lain tidak terpengaruh.
+
 ### 4. Deploy
 
 ```bash
@@ -73,7 +92,7 @@ Setelah deploy, kamu akan dapat URL seperti `https://github-mcp-server.<subdomai
 2. Klik **+** → **Add custom connector**
 3. **Name**: `GitHub Ops`
 4. **URL**: `https://github-mcp-server.<subdomain>.workers.dev/mcp`
-5. Klik **Add** — Claude akan otomatis melakukan Dynamic Client Registration ke endpoint `/register`
+5. Klik **Add** → Claude akan otomatis melakukan Dynamic Client Registration ke endpoint `/register`
 6. Ikuti flow OAuth (redirect ke halaman consent server ini → lalu ke GitHub → approve)
 7. Selesai — di percakapan manapun, aktifkan connector "GitHub Ops" dan Claude bisa langsung push/buat repo
 
@@ -88,6 +107,12 @@ Setelah deploy, kamu akan dapat URL seperti `https://github-mcp-server.<subdomai
 | `get_file_contents` | Baca isi file/folder dari repo |
 | `list_commits` | Lihat commit terakhir di suatu branch |
 | `list_issues` | Lihat daftar issue di repo |
+| `list_pull_requests` | Lihat daftar pull request di repo |
+| `get_pull_request` | Lihat detail lengkap satu pull request |
+| `search_code` | Cari pattern kode/nama file lintas repo |
+| `get_workflow_runs` | Cek status run terakhir suatu GitHub Actions workflow |
+| `wait_for_workflow` | Tunggu sampai satu workflow run selesai, lalu laporkan hasilnya |
+| `get_worker_deployment_status` | **(Cloudflare)** Cek versi yang live, strategi rollout, dan waktu deploy terakhir Worker ini langsung dari Cloudflare API |
 
 **Write — non-destructive**:
 
@@ -106,7 +131,7 @@ Setelah deploy, kamu akan dapat URL seperti `https://github-mcp-server.<subdomai
 | `delete_file` | Hapus file dari repo |
 | `merge_pull_request` | Merge PR (mengubah history branch, gak bisa di-undo dari sini) |
 
-**Differentiator — gak ada di server GitHub generic manapun**, karena gabungan GitHub + CI/CD kamu sendiri:
+**Differentiator — gak ada di server GitHub generic manapun**, karena gabungan GitHub + CI/CD + Cloudflare kamu sendiri:
 
 | Tool | Fungsi |
 |---|---|
@@ -114,6 +139,7 @@ Setelah deploy, kamu akan dapat URL seperti `https://github-mcp-server.<subdomai
 | `trigger_workflow` | Jalankan GitHub Actions workflow manual (`workflow_dispatch`) — misal trigger deploy |
 | `get_workflow_runs` | Cek status run terakhir suatu workflow (queued/in_progress/success/failure) |
 | `deploy_and_push` | Push file **+ langsung trigger deploy workflow** dalam satu panggilan |
+| `get_worker_deployment_status` | Cek langsung ke Cloudflare API: versi Worker yang live, persentase rollout gradual deployment, kapan terakhir deploy — melengkapi `get_workflow_runs`/`wait_for_workflow` yang hanya tahu status CI, bukan status live di edge Cloudflare |
 
 ⚠️ `trigger_workflow`/`deploy_and_push` butuh workflow target punya trigger `workflow_dispatch:`
 di file YAML-nya. Kalau pakai project `my-app` dari percakapan sebelumnya, tambahkan ini ke
@@ -152,16 +178,25 @@ npx wrangler d1 execute github-mcp-audit-log --remote \
   --command "SELECT * FROM audit_log ORDER BY created_at DESC LIMIT 20"
 ```
 
+`get_worker_deployment_status` bersifat read-only dan tidak mencatat ke audit log ini,
+sama seperti tool read-only lainnya.
+
 ## Error Handling
 
 Semua tool dibungkus `withErrorHandling()` (lihat `src/error-handling.ts`) yang menerjemahkan
-error GitHub API jadi pesan yang jelas, bukan stack trace mentah:
+error GitHub API dan Cloudflare API jadi pesan yang jelas, bukan stack trace mentah:
 
+**GitHub:**
 - `401` → sesi kadaluarsa, minta reconnect
 - `403` → ditolak/kena rate limit, tampilkan pesan dari GitHub
 - `404` → repo/branch/file tidak ditemukan atau tidak punya akses
 - `409` → konflik (biasanya branch reference basi)
 - `422` → parameter tidak valid
+
+**Cloudflare** (dipakai oleh `get_worker_deployment_status`, lihat `src/cloudflare.ts`):
+- `401` → `CLOUDFLARE_API_TOKEN` belum di-set/invalid/expired
+- `403` → token tidak punya permission `Workers Scripts:Read`
+- `404` → nama script Worker salah, atau `CLOUDFLARE_ACCOUNT_ID` salah
 
 ## CI/CD
 
@@ -179,12 +214,17 @@ Secrets yang perlu ditambahkan di GitHub repo settings supaya `deploy.yml` bisa 
 - `CLOUDFLARE_ACCOUNT_ID`
 
 (Ini terpisah dari secret `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET`/`COOKIE_ENCRYPTION_KEY`
-yang di-set langsung ke Worker lewat `wrangler secret put`, bukan lewat GitHub Actions.)
+dan dari secret `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` di langkah 3b, yang di-set
+langsung ke Worker lewat `wrangler secret put`, bukan lewat GitHub Actions. Kamu bisa memakai
+token Cloudflare yang sama di kedua tempat kalau scope-nya mencakup keduanya, tapi keduanya
+harus di-set terpisah karena GitHub Actions secrets dan Worker secrets adalah dua sistem yang berbeda.)
 
 ## Keamanan
 
 - Token GitHub kamu **tidak pernah** diketik di chat atau disimpan sebagai plaintext di server
 - Scope OAuth yang diminta: `repo` (akses baca/tulis repo) dan `read:user`
+- Token Cloudflare untuk `get_worker_deployment_status` sebaiknya dibuat scoped
+  (**Workers Scripts:Read** saja), bukan Global API Key
 - Kalau mau cabut akses: GitHub → **Settings → Applications → Authorized OAuth Apps** →
   cabut akses "GitHub Ops MCP Server" kapan saja
 - Untuk multi-user/production sungguhan, pertimbangkan menambah rate limiting dan audit log
