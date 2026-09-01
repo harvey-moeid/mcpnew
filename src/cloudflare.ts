@@ -1,17 +1,10 @@
 /**
- * Minimal Cloudflare API client used by Cloudflare-related tools (e.g.
- * get_worker_deployment_status).
+ * Minimal Cloudflare API client used by Cloudflare-related tools.
  *
  * Auth: a scoped Cloudflare API Token (never the legacy Global API Key),
- * read via env.CLOUDFLARE_API_TOKEN. Requires the "Workers Scripts:Read"
- * permission on the account in env.CLOUDFLARE_ACCOUNT_ID.
- *
- * Both secrets must be set directly on this Worker with
- * `wrangler secret put CLOUDFLARE_API_TOKEN` / `wrangler secret put
- * CLOUDFLARE_ACCOUNT_ID` — they are separate from the CLOUDFLARE_API_TOKEN /
- * CLOUDFLARE_ACCOUNT_ID GitHub Actions secrets used to *deploy* this Worker
- * in .github/workflows/deploy.yml, though the same token can be reused for
- * both if its scopes cover both use cases.
+ * read via env.CLOUDFLARE_API_TOKEN. Secrets must be set with
+ * `wrangler secret put CLOUDFLARE_API_TOKEN` and
+ * `wrangler secret put CLOUDFLARE_ACCOUNT_ID`.
  */
 
 const CF_API_BASE = 'https://api.cloudflare.com/client/v4'
@@ -31,7 +24,7 @@ type CloudflareResponse<T> = {
   errors: Array<{ code: number; message: string }>
 }
 
-async function cfFetch<T>(env: Env, path: string): Promise<T> {
+async function cfFetch<T>(env: Env, path: string, options?: RequestInit): Promise<T> {
   if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID) {
     throw new Error(
       'Cloudflare API not configured on this Worker: set CLOUDFLARE_API_TOKEN and ' +
@@ -40,9 +33,11 @@ async function cfFetch<T>(env: Env, path: string): Promise<T> {
   }
 
   const res = await fetch(`${CF_API_BASE}/accounts/${env.CLOUDFLARE_ACCOUNT_ID}${path}`, {
+    ...options,
     headers: {
       Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
       'Content-Type': 'application/json',
+      ...(options?.headers ?? {}),
     },
   })
 
@@ -64,6 +59,10 @@ async function cfFetch<T>(env: Env, path: string): Promise<T> {
   return json.result
 }
 
+// ---------------------------------------------------------------------------
+// Workers: deployments
+// ---------------------------------------------------------------------------
+
 export type WorkerDeploymentVersion = {
   version_id: string
   percentage?: number
@@ -83,10 +82,7 @@ export type WorkerDeployment = {
 /**
  * GET /accounts/:account_id/workers/scripts/:script_name/deployments
  *
- * Cloudflare's response shape for this endpoint has varied across API
- * revisions (a bare array vs. `{ deployments: [...] }` vs. `{ items: [...] }`),
- * so the result is normalized defensively into a single `deployments` array,
- * most recent first.
+ * Response shape has varied across API revisions, so normalized defensively.
  */
 export async function getWorkerDeployments(
   env: Env,
@@ -97,4 +93,57 @@ export async function getWorkerDeployments(
     ? result
     : result?.deployments ?? result?.items ?? []
   return { deployments }
+}
+
+// ---------------------------------------------------------------------------
+// R2: list objects
+// ---------------------------------------------------------------------------
+
+export type R2Object = {
+  key: string
+  size: number
+  last_modified: string
+  etag?: string
+  storage_class?: string
+}
+
+export type R2ListResult = {
+  objects: R2Object[]
+  truncated: boolean
+  cursor?: string
+}
+
+/**
+ * GET /accounts/:account_id/r2/buckets/:bucket_name/objects
+ *
+ * Lists objects in an R2 bucket via the Cloudflare API.
+ * Requires "R2:Read" permission on the API token.
+ */
+export async function listR2Objects(
+  env: Env,
+  bucketName: string,
+  opts: { prefix?: string; limit?: number; cursor?: string } = {}
+): Promise<R2ListResult> {
+  const params = new URLSearchParams()
+  if (opts.prefix) params.set('prefix', opts.prefix)
+  if (opts.limit) params.set('per_page', String(opts.limit))
+  if (opts.cursor) params.set('cursor', opts.cursor)
+
+  const qs = params.toString() ? `?${params.toString()}` : ''
+  const result = await cfFetch<any>(env, `/r2/buckets/${bucketName}/objects${qs}`)
+
+  // Normalize response shape defensively
+  const objects: R2Object[] = (result?.objects ?? result?.items ?? result ?? []).map((o: any) => ({
+    key: o.key ?? o.name ?? '',
+    size: o.size ?? 0,
+    last_modified: o.uploaded ?? o.last_modified ?? '',
+    etag: o.etag,
+    storage_class: o.storage_class,
+  }))
+
+  return {
+    objects,
+    truncated: result?.truncated ?? false,
+    cursor: result?.cursor,
+  }
 }
