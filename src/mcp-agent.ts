@@ -778,12 +778,12 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     this.server.registerTool('smoke_test', {
       description:
         'POST-deploy smoke test: sends an HTTP GET to a given URL and checks the response status. ' +
-        'Returns OK if the status matches expected_status, FAIL otherwise. ' +
+        'Returns OK if status matches expected (default 200), FAIL otherwise. ' +
         'Useful for verifying a Worker or Pages site is live after a deploy.',
       inputSchema: {
         url: z.string().url().describe('URL to probe, e.g. "https://mcpnew.muidsoft.com/"'),
-        expected_status: z.number().min(100).max(599).default(200).describe('Expected HTTP status code (default 200)'),
-        timeout_ms: z.number().min(1000).max(30000).default(10000).describe('Request timeout in milliseconds'),
+        expected_status: z.number().min(100).max(599).default(200).describe('Expected HTTP status code'),
+        timeout_ms: z.number().min(1000).max(30000).default(10000).describe('Request timeout in ms'),
       },
       annotations: { title: 'Smoke test URL', readOnlyHint: true, openWorldHint: true },
     }, withErrorHandling(async ({ url, expected_status, timeout_ms }) => {
@@ -806,12 +806,10 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       clearTimeout(timer)
       const ok = status === expected_status
       const icon = ok ? 'OK' : 'FAIL'
-      const text =
-        `[${icon}] ${url}\n` +
-        `Status  : ${status} ${statusText}\n` +
-        `Expected: ${expected_status}\n` +
-        `Elapsed : ${elapsed}ms`
-      return { content: [{ type: 'text', text }], isError: !ok }
+      return {
+        content: [{ type: 'text', text: `[${icon}] ${url}\nStatus  : ${status} ${statusText}\nExpected: ${expected_status}\nElapsed : ${elapsed}ms` }],
+        isError: !ok,
+      }
     }))
 
     this.server.registerTool('get_pr_preview_url', {
@@ -829,20 +827,12 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       const { data: pr } = await octokit.rest.pulls.get({ ...r, pull_number })
       const headSha = pr.head.sha
       const headBranch = pr.head.ref
-      const { data: deployments } = await octokit.rest.repos.listDeployments({
-        ...r,
-        ref: headBranch,
-        per_page: 10,
-      })
+      const { data: deployments } = await octokit.rest.repos.listDeployments({ ...r, ref: headBranch, per_page: 10 })
       if (deployments.length === 0) {
         return { content: [{ type: 'text', text: `No deployments found for PR #${pull_number} (branch: ${headBranch}).` }] }
       }
       const target = deployments.find((d) => d.sha === headSha) ?? deployments[0]
-      const { data: statuses } = await octokit.rest.repos.listDeploymentStatuses({
-        ...r,
-        deployment_id: target.id,
-        per_page: 5,
-      })
+      const { data: statuses } = await octokit.rest.repos.listDeploymentStatuses({ ...r, deployment_id: target.id, per_page: 5 })
       const latest = statuses[0]
       const previewUrl = latest?.environment_url ?? latest?.log_url ?? null
       const lines = [
@@ -859,13 +849,13 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     this.server.registerTool('rerun_workflow', {
       description:
         'Re-run a specific GitHub Actions workflow run by its run_id. ' +
-        'Useful after a transient failure — re-triggers the same run without a new commit. ' +
+        'Useful after a transient failure — re-triggers without a new commit. ' +
         'Use get_workflow_runs to find the run_id.',
       inputSchema: {
         owner: z.string().optional(),
         repo: z.string().optional(),
         run_id: z.number().describe('Workflow run ID (from get_workflow_runs)'),
-        failed_jobs_only: z.boolean().default(false).describe('If true, only re-run failed jobs (not the whole run)'),
+        failed_jobs_only: z.boolean().default(false).describe('If true, only re-run failed jobs'),
       },
       annotations: { title: 'Re-run workflow', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     }, writeTool('rerun_workflow', ({ run_id }) => `Re-ran workflow run #${run_id}`, async ({ owner, repo, run_id, failed_jobs_only }) => {
