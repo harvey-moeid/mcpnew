@@ -49,3 +49,5 @@ custom_domain = true
 #   COOKIE_ENCRYPTION_KEY
 #   CLOUDFLARE_API_TOKEN     <- used by get_worker_deployment_status (src/cloudflare.ts)
 #   CLOUDFLARE_ACCOUNT_ID    <- used by get_worker_deployment_status (src/cloudflare.ts)
+
+# Last manual deploy trigger: 2026-09-01 (secrets + D1 migration applied)
