@@ -1,5 +1,4 @@
-// Minimal ambient Env type. Regenerate with `wrangler types` for full accuracy
-// once real bindings/secrets are configured.
+// Minimal ambient Env type. Regenerate with `wrangler types` for full accuracy.
 interface Env {
   MCP_OBJECT: DurableObjectNamespace
   OAUTH_KV: KVNamespace
@@ -12,7 +11,9 @@ interface Env {
   PROTECTED_BRANCHES: string
   ALLOW_DIRECT_PUSH_TO_PROTECTED: string
   // Cloudflare API — used by get_worker_deployment_status and list_r2_objects.
-  // Set via `wrangler secret put`. Requires Workers Scripts:Read + R2:Read permissions.
+  // Requires Workers Scripts:Read + R2:Read permissions.
+  // Set via `wrangler secret put CLOUDFLARE_API_TOKEN` and
+  //          `wrangler secret put CLOUDFLARE_ACCOUNT_ID`
   CLOUDFLARE_API_TOKEN: string
   CLOUDFLARE_ACCOUNT_ID: string
 }
