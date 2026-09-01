@@ -29,7 +29,7 @@ const kvKey = {
 export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
   server = new McpServer({
     name: 'GitHub Ops MCP Server',
-    version: '1.6.0',
+    version: '1.7.0',
   })
 
   private octokit(): Octokit {
@@ -769,6 +769,114 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     }, writeTool('delete_r2_object', ({ bucket, key }) => `Deleted "${key}" from bucket "${bucket}"`, async ({ bucket, key }) => {
       await deleteR2Object(this.env, bucket, key)
       return { content: [{ type: 'text', text: `Deleted "${key}" from R2 bucket "${bucket}".` }] }
+    }))
+
+    // -------------------------------------------------------------------------
+    // NEW v1.7.0: smoke_test, get_pr_preview_url, rerun_workflow
+    // -------------------------------------------------------------------------
+
+    this.server.registerTool('smoke_test', {
+      description:
+        'POST-deploy smoke test: sends an HTTP GET to a given URL and checks the response status. ' +
+        'Returns OK if the status matches expected_status, FAIL otherwise. ' +
+        'Useful for verifying a Worker or Pages site is live after a deploy.',
+      inputSchema: {
+        url: z.string().url().describe('URL to probe, e.g. "https://mcpnew.muidsoft.com/"'),
+        expected_status: z.number().min(100).max(599).default(200).describe('Expected HTTP status code (default 200)'),
+        timeout_ms: z.number().min(1000).max(30000).default(10000).describe('Request timeout in milliseconds'),
+      },
+      annotations: { title: 'Smoke test URL', readOnlyHint: true, openWorldHint: true },
+    }, withErrorHandling(async ({ url, expected_status, timeout_ms }) => {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), timeout_ms)
+      let status: number
+      let statusText: string
+      let elapsed: number
+      try {
+        const t0 = Date.now()
+        const res = await fetch(url, { method: 'GET', signal: controller.signal, redirect: 'follow' })
+        elapsed = Date.now() - t0
+        status = res.status
+        statusText = res.statusText
+      } catch (err: any) {
+        clearTimeout(timer)
+        const msg = err?.name === 'AbortError' ? `Timed out after ${timeout_ms}ms` : String(err)
+        return { content: [{ type: 'text', text: `[FAIL] ${url}\nError: ${msg}` }], isError: true }
+      }
+      clearTimeout(timer)
+      const ok = status === expected_status
+      const icon = ok ? 'OK' : 'FAIL'
+      const text =
+        `[${icon}] ${url}\n` +
+        `Status  : ${status} ${statusText}\n` +
+        `Expected: ${expected_status}\n` +
+        `Elapsed : ${elapsed}ms`
+      return { content: [{ type: 'text', text }], isError: !ok }
+    }))
+
+    this.server.registerTool('get_pr_preview_url', {
+      description:
+        'Get the Cloudflare Pages (or any GitHub deployment) preview URL for a pull request. ' +
+        'Reads the most recent GitHub deployment on the PR head branch.',
+      inputSchema: {
+        owner: z.string().optional(),
+        repo: z.string().optional(),
+        pull_number: z.number().describe('PR number'),
+      },
+      annotations: { title: 'Get PR preview URL', readOnlyHint: true, openWorldHint: true },
+    }, withErrorHandling(async ({ owner, repo, pull_number }) => {
+      const r = await this.resolveRepo(owner, repo)
+      const { data: pr } = await octokit.rest.pulls.get({ ...r, pull_number })
+      const headSha = pr.head.sha
+      const headBranch = pr.head.ref
+      const { data: deployments } = await octokit.rest.repos.listDeployments({
+        ...r,
+        ref: headBranch,
+        per_page: 10,
+      })
+      if (deployments.length === 0) {
+        return { content: [{ type: 'text', text: `No deployments found for PR #${pull_number} (branch: ${headBranch}).` }] }
+      }
+      const target = deployments.find((d) => d.sha === headSha) ?? deployments[0]
+      const { data: statuses } = await octokit.rest.repos.listDeploymentStatuses({
+        ...r,
+        deployment_id: target.id,
+        per_page: 5,
+      })
+      const latest = statuses[0]
+      const previewUrl = latest?.environment_url ?? latest?.log_url ?? null
+      const lines = [
+        `PR #${pull_number}: ${pr.title}`,
+        `Branch      : ${headBranch}`,
+        `Head SHA    : ${headSha.slice(0, 7)}`,
+        `Environment : ${target.environment}`,
+        `Deploy state: ${latest?.state ?? 'unknown'}`,
+        `Preview URL : ${previewUrl ?? '(not available yet)'}`,
+      ]
+      return { content: [{ type: 'text', text: lines.join('\n') }] }
+    }))
+
+    this.server.registerTool('rerun_workflow', {
+      description:
+        'Re-run a specific GitHub Actions workflow run by its run_id. ' +
+        'Useful after a transient failure — re-triggers the same run without a new commit. ' +
+        'Use get_workflow_runs to find the run_id.',
+      inputSchema: {
+        owner: z.string().optional(),
+        repo: z.string().optional(),
+        run_id: z.number().describe('Workflow run ID (from get_workflow_runs)'),
+        failed_jobs_only: z.boolean().default(false).describe('If true, only re-run failed jobs (not the whole run)'),
+      },
+      annotations: { title: 'Re-run workflow', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    }, writeTool('rerun_workflow', ({ run_id }) => `Re-ran workflow run #${run_id}`, async ({ owner, repo, run_id, failed_jobs_only }) => {
+      const r = await this.resolveRepo(owner, repo)
+      if (failed_jobs_only) {
+        await octokit.rest.actions.reRunWorkflowFailedJobs({ ...r, run_id })
+      } else {
+        await octokit.rest.actions.reRunWorkflow({ ...r, run_id })
+      }
+      const mode = failed_jobs_only ? 'failed jobs only' : 'all jobs'
+      return { content: [{ type: 'text', text: `Re-running workflow run #${run_id} in ${r.owner}/${r.repo} (${mode}).` }] }
     }))
   }
 }
