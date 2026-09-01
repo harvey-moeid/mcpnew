@@ -11,8 +11,8 @@ interface Env {
   GITHUB_ALLOWED_USERS: string
   PROTECTED_BRANCHES: string
   ALLOW_DIRECT_PUSH_TO_PROTECTED: string
-  // Used by get_worker_deployment_status (src/cloudflare.ts) to call the
-  // Cloudflare API directly. Set via `wrangler secret put`.
+  // Cloudflare API — used by get_worker_deployment_status and list_r2_objects.
+  // Set via `wrangler secret put`. Requires Workers Scripts:Read + R2:Read permissions.
   CLOUDFLARE_API_TOKEN: string
   CLOUDFLARE_ACCOUNT_ID: string
 }
