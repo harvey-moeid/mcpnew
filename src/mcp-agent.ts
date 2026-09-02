@@ -38,7 +38,7 @@ type StoredNote = {
 export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
   server = new McpServer({
     name: 'GitHub Ops MCP Server',
-    version: '1.9.0',
+    version: '1.9.1',
   })
 
   private octokit(): Octokit {
@@ -53,6 +53,9 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     repo: string | undefined
   ): Promise<{ owner: string; repo: string }> {
     if (owner && repo) return { owner, repo }
+    if (!this.props?.login) {
+      throw new Error('Not authenticated: missing GitHub login in session props')
+    }
     const stored = await this.env.OAUTH_KV.get(kvKey.defaultRepo(this.props.login))
     if (!stored) {
       throw new Error(
@@ -74,10 +77,6 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       summarize: (args: Args, result: import('@modelcontextprotocol/sdk/types.js').CallToolResult) => string,
       handler: (args: Args) => Promise<import('@modelcontextprotocol/sdk/types.js').CallToolResult>
     ) => withAudit(audit, props.login, toolName, summarize, withErrorHandling(handler))
-
-    // -------------------------------------------------------------------------
-    // Memory: notes
-    // -------------------------------------------------------------------------
 
     this.server.registerTool('set_note', {
       description: 'Save a persistent note in KV storage. Notes survive across sessions and can be read back with get_note, list_notes, or found via search_notes. Optional tags help group and filter related notes.',
@@ -168,10 +167,6 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       return { content: [{ type: 'text', text: `Note "${name}" deleted.` }] }
     }))
 
-    // -------------------------------------------------------------------------
-    // Memory: default repo
-    // -------------------------------------------------------------------------
-
     this.server.registerTool('set_default_repo', {
       description: 'Set a default owner/repo so you don\'t have to type it on every tool call.',
       inputSchema: {
@@ -193,10 +188,6 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       if (!stored) return { content: [{ type: 'text', text: 'No default repo set.' }] }
       return { content: [{ type: 'text', text: `Default repo: ${stored}` }] }
     }))
-
-    // -------------------------------------------------------------------------
-    // Read-only: GitHub
-    // -------------------------------------------------------------------------
 
     this.server.registerTool('whoami', {
       description: 'Return the GitHub account currently authenticated with this MCP server.',
@@ -442,10 +433,6 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       await octokit.rest.git.deleteRef({ owner: r.owner, repo: r.repo, ref: `heads/${branch}` })
       return { content: [{ type: 'text', text: `Deleted branch "${branch}" from ${r.owner}/${r.repo}.` }] }
     }))
-
-    // -------------------------------------------------------------------------
-    // Write tools: GitHub
-    // -------------------------------------------------------------------------
 
     this.server.registerTool('create_repository', {
       description: 'Create a new GitHub repository owned by the authenticated user.',
@@ -745,10 +732,6 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       return { content: [{ type: 'text', text }] }
     }))
 
-    // -------------------------------------------------------------------------
-    // R2: read / write / delete
-    // -------------------------------------------------------------------------
-
     this.server.registerTool('list_r2_objects', {
       description: 'List objects in a Cloudflare R2 bucket. Requires CLOUDFLARE_API_TOKEN (R2:Read) and CLOUDFLARE_ACCOUNT_ID.',
       inputSchema: {
@@ -816,10 +799,6 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       await deleteR2Object(this.env, bucket, key)
       return { content: [{ type: 'text', text: `Deleted "${key}" from R2 bucket "${bucket}".` }] }
     }))
-
-    // -------------------------------------------------------------------------
-    // v1.7.0: smoke_test, get_pr_preview_url, rerun_workflow
-    // -------------------------------------------------------------------------
 
     this.server.registerTool('smoke_test', {
       description:
@@ -925,10 +904,6 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       return { content: [{ type: 'text', text: `Re-running workflow run #${run_id} in ${r.owner}/${r.repo} (${mode}).` }] }
     }))
 
-    // -------------------------------------------------------------------------
-    // v1.8.0: fetch_url, web_search - general internet access for Claude
-    // -------------------------------------------------------------------------
-
     this.server.registerTool('fetch_url', {
       description:
         'Fetch a web page by URL and return its readable text content (HTML tags, scripts, and styles ' +
@@ -968,10 +943,6 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       const text = results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.description}`).join('\n\n')
       return { content: [{ type: 'text', text: `Search results for "${query}":\n\n${text}` }] }
     }))
-
-    // -------------------------------------------------------------------------
-    // v1.9.0: MCP Prompts - canned workflows built on top of the tools above
-    // -------------------------------------------------------------------------
 
     this.server.registerPrompt('release-checklist', {
       title: 'Release checklist',
