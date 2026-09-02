@@ -13,6 +13,7 @@ import {
   deleteR2Object,
 } from './cloudflare'
 import { fetchUrl, webSearch } from './web'
+import { releaseChecklistPrompt, prReviewPrompt, repoCleanupPrompt } from './prompts'
 
 export type GitHubProps = {
   login: string
@@ -27,10 +28,17 @@ const kvKey = {
   defaultRepo: (actor: string) => `default-repo:${actor}`,
 }
 
+type StoredNote = {
+  content: string
+  updated_at: string
+  actor: string
+  tags?: string[]
+}
+
 export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
   server = new McpServer({
     name: 'GitHub Ops MCP Server',
-    version: '1.8.1',
+    version: '1.9.0',
   })
 
   private octokit(): Octokit {
@@ -72,16 +80,19 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     // -------------------------------------------------------------------------
 
     this.server.registerTool('set_note', {
-      description: 'Save a persistent note in KV storage. Notes survive across sessions and can be read back with get_note or list_notes.',
+      description: 'Save a persistent note in KV storage. Notes survive across sessions and can be read back with get_note, list_notes, or found via search_notes. Optional tags help group and filter related notes.',
       inputSchema: {
         name: z.string().describe('Short key for the note'),
         content: z.string().describe('The note content. Can be multi-line.'),
+        tags: z.array(z.string()).optional().describe('Optional tags for grouping/filtering, e.g. ["mcpnew", "todo"]'),
       },
       annotations: { title: 'Set note', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    }, withErrorHandling(async ({ name, content }) => {
+    }, withErrorHandling(async ({ name, content, tags }) => {
       const key = kvKey.note(props.login, name)
-      await this.env.OAUTH_KV.put(key, JSON.stringify({ content, updated_at: new Date().toISOString(), actor: props.login }))
-      return { content: [{ type: 'text', text: `Note "${name}" saved.` }] }
+      const note: StoredNote = { content, updated_at: new Date().toISOString(), actor: props.login, tags: tags ?? [] }
+      await this.env.OAUTH_KV.put(key, JSON.stringify(note))
+      const tagsLabel = tags && tags.length > 0 ? ` (tags: ${tags.join(', ')})` : ''
+      return { content: [{ type: 'text', text: `Note "${name}" saved.${tagsLabel}` }] }
     }))
 
     this.server.registerTool('get_note', {
@@ -91,8 +102,9 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     }, withErrorHandling(async ({ name }) => {
       const raw = await this.env.OAUTH_KV.get(kvKey.note(props.login, name))
       if (!raw) return { content: [{ type: 'text', text: `Note "${name}" not found.` }] }
-      const { content, updated_at } = JSON.parse(raw)
-      return { content: [{ type: 'text', text: `Note: ${name}\nUpdated: ${updated_at}\n\n${content}` }] }
+      const { content, updated_at, tags } = JSON.parse(raw) as StoredNote
+      const tagsLine = tags && tags.length > 0 ? `Tags: ${tags.join(', ')}\n` : ''
+      return { content: [{ type: 'text', text: `Note: ${name}\nUpdated: ${updated_at}\n${tagsLine}\n${content}` }] }
     }))
 
     this.server.registerTool('list_notes', {
@@ -106,12 +118,45 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       const entries = await Promise.all(listed.keys.map(async (k) => {
         const raw = await this.env.OAUTH_KV.get(k.name)
         if (!raw) return null
-        const { content, updated_at } = JSON.parse(raw)
+        const { content, updated_at, tags } = JSON.parse(raw) as StoredNote
         const name = k.name.replace(prefix, '')
         const preview = content.split('\n')[0].slice(0, 80)
-        return `${name}\n   Updated: ${updated_at}\n   Preview: ${preview}${content.length > 80 ? '...' : ''}`
+        const tagsLabel = tags && tags.length > 0 ? ` [${tags.join(', ')}]` : ''
+        return `${name}${tagsLabel}\n   Updated: ${updated_at}\n   Preview: ${preview}${content.length > 80 ? '...' : ''}`
       }))
       return { content: [{ type: 'text', text: `Notes (${listed.keys.length}):\n\n${entries.filter(Boolean).join('\n\n')}` }] }
+    }))
+
+    this.server.registerTool('search_notes', {
+      description: 'Search saved notes by text (matches note name or content, case-insensitive) and/or by tag. Provide a query, tags, or both.',
+      inputSchema: {
+        query: z.string().optional().describe('Substring to search for in the note name or content'),
+        tags: z.array(z.string()).optional().describe('Only include notes that have at least one of these tags'),
+      },
+      annotations: { title: 'Search notes', readOnlyHint: true, openWorldHint: false },
+    }, withErrorHandling(async ({ query, tags }) => {
+      if (!query && (!tags || tags.length === 0)) {
+        return { content: [{ type: 'text', text: 'Provide a query and/or tags to search for.' }], isError: true }
+      }
+      const prefix = kvKey.notePrefix(props.login)
+      const listed = await this.env.OAUTH_KV.list({ prefix })
+      const q = query?.toLowerCase()
+      const results: string[] = []
+      for (const k of listed.keys) {
+        const raw = await this.env.OAUTH_KV.get(k.name)
+        if (!raw) continue
+        const { content, updated_at, tags: noteTags } = JSON.parse(raw) as StoredNote
+        const name = k.name.replace(prefix, '')
+        const matchesQuery = !q || name.toLowerCase().includes(q) || content.toLowerCase().includes(q)
+        const matchesTags = !tags || tags.length === 0 || (noteTags ?? []).some((t) => tags.includes(t))
+        if (matchesQuery && matchesTags) {
+          const preview = content.split('\n')[0].slice(0, 80)
+          const tagsLabel = noteTags && noteTags.length > 0 ? ` [${noteTags.join(', ')}]` : ''
+          results.push(`${name}${tagsLabel}\n   Updated: ${updated_at}\n   Preview: ${preview}${content.length > 80 ? '...' : ''}`)
+        }
+      }
+      if (results.length === 0) return { content: [{ type: 'text', text: 'No matching notes found.' }] }
+      return { content: [{ type: 'text', text: `Found ${results.length} note(s):\n\n${results.join('\n\n')}` }] }
     }))
 
     this.server.registerTool('delete_note', {
@@ -881,7 +926,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     }))
 
     // -------------------------------------------------------------------------
-    // v1.8.0: fetch_url, web_search — general internet access for Claude
+    // v1.8.0: fetch_url, web_search - general internet access for Claude
     // -------------------------------------------------------------------------
 
     this.server.registerTool('fetch_url', {
@@ -923,6 +968,65 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       const text = results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.description}`).join('\n\n')
       return { content: [{ type: 'text', text: `Search results for "${query}":\n\n${text}` }] }
     }))
+
+    // -------------------------------------------------------------------------
+    // v1.9.0: MCP Prompts - canned workflows built on top of the tools above
+    // -------------------------------------------------------------------------
+
+    this.server.registerPrompt('release-checklist', {
+      title: 'Release checklist',
+      description: 'Walk through verifying a release is healthy: CI status, smoke test, and Worker deployment status.',
+      argsSchema: {
+        owner: z.string().optional(),
+        repo: z.string().optional(),
+        branch: z.string().default('main'),
+        workflow_id: z.string().optional(),
+        smoke_test_url: z.string().optional(),
+      },
+    }, async ({ owner, repo, branch, workflow_id, smoke_test_url }) => {
+      const r = await this.resolveRepo(owner, repo)
+      return {
+        messages: [{
+          role: 'user',
+          content: { type: 'text', text: releaseChecklistPrompt({ ...r, branch, workflow_id, smoke_test_url }) },
+        }],
+      }
+    })
+
+    this.server.registerPrompt('pr-review', {
+      title: 'PR review',
+      description: 'Review a pull request: description, CI status, preview deployment, and a structured recommendation.',
+      argsSchema: {
+        owner: z.string().optional(),
+        repo: z.string().optional(),
+        pull_number: z.number().describe('PR number to review'),
+      },
+    }, async ({ owner, repo, pull_number }) => {
+      const r = await this.resolveRepo(owner, repo)
+      return {
+        messages: [{
+          role: 'user',
+          content: { type: 'text', text: prReviewPrompt({ ...r, pull_number }) },
+        }],
+      }
+    })
+
+    this.server.registerPrompt('repo-cleanup', {
+      title: 'Repo cleanup',
+      description: 'Find branches that are already merged and safe to delete, and clean them up carefully.',
+      argsSchema: {
+        owner: z.string().optional(),
+        repo: z.string().optional(),
+      },
+    }, async ({ owner, repo }) => {
+      const r = await this.resolveRepo(owner, repo)
+      return {
+        messages: [{
+          role: 'user',
+          content: { type: 'text', text: repoCleanupPrompt(r) },
+        }],
+      }
+    })
   }
 }
 
