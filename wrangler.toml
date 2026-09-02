@@ -47,7 +47,9 @@ custom_domain = true
 #   GITHUB_CLIENT_ID
 #   GITHUB_CLIENT_SECRET
 #   COOKIE_ENCRYPTION_KEY
-#   CLOUDFLARE_API_TOKEN     <- used by get_worker_deployment_status (src/cloudflare.ts)
-#   CLOUDFLARE_ACCOUNT_ID    <- used by get_worker_deployment_status (src/cloudflare.ts)
+#   CLOUDFLARE_API_TOKEN     <- used by get_worker_deployment_status + R2 tools (src/cloudflare.ts)
+#   CLOUDFLARE_ACCOUNT_ID    <- used by get_worker_deployment_status + R2 tools (src/cloudflare.ts)
+#   BRAVE_API_KEY            <- optional, used by web_search (src/web.ts); fetch_url needs no key
 
 # Last manual deploy trigger: 2026-09-01 (secrets + D1 migration applied)
+# v1.8.0: added fetch_url + web_search (src/web.ts) — 2026-09-02
