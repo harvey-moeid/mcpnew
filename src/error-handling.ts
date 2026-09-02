@@ -27,9 +27,9 @@ function describeError(err: unknown): string {
       case 403:
         return `GitHub denied this action (403): ${extractGithubMessage(err) ?? 'insufficient permissions or rate-limited.'}`
       case 404:
-        return `GitHub returned 404 — the repository, branch, or file does not exist, or you don't have access to it.`
+        return `GitHub returned 404 \u2014 the repository, branch, or file does not exist, or you don't have access to it.`
       case 409:
-        return `GitHub returned 409 (conflict) — likely a stale branch reference. Try again after re-reading the latest commit.`
+        return `GitHub returned 409 (conflict) \u2014 likely a stale branch reference. Try again after re-reading the latest commit.`
       case 422:
         return `GitHub rejected the request as invalid (422): ${extractGithubMessage(err) ?? 'check the parameters you passed.'}`
       default:
@@ -44,7 +44,7 @@ function describeError(err: unknown): string {
       case 403:
         return `Cloudflare denied this action (403): ${err.message || 'the token is missing the required permission (Workers Scripts:Read).'}`
       case 404:
-        return 'Cloudflare returned 404 — check the Worker script name and CLOUDFLARE_ACCOUNT_ID.'
+        return `Cloudflare returned 404 \u2014 check the Worker script name and CLOUDFLARE_ACCOUNT_ID.`
       default:
         return `Cloudflare API error (${err.status}): ${err.message}`
     }
