@@ -118,8 +118,14 @@ export type WebSearchResultItem = {
 /**
  * Query the Brave Search API and return normalized web results.
  * Requires env.BRAVE_API_KEY to be set (`wrangler secret put BRAVE_API_KEY`).
+ * Supports an optional timeoutMs to abort slow/hung requests (default 15s).
  */
-export async function webSearch(env: Env, query: string, count: number): Promise<WebSearchResultItem[]> {
+export async function webSearch(
+  env: Env,
+  query: string,
+  count: number,
+  timeoutMs = DEFAULT_TIMEOUT_MS
+): Promise<WebSearchResultItem[]> {
   if (!env.BRAVE_API_KEY) {
     throw new WebSearchError(
       'Web search not configured on this Worker: set BRAVE_API_KEY secret with ' +
@@ -128,12 +134,25 @@ export async function webSearch(env: Env, query: string, count: number): Promise
   }
 
   const params = new URLSearchParams({ q: query, count: String(count) })
-  const res = await fetch(`https://api.search.brave.com/res/v1/web/search?${params.toString()}`, {
-    headers: {
-      Accept: 'application/json',
-      'X-Subscription-Token': env.BRAVE_API_KEY,
-    },
-  })
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  let res: Response
+  try {
+    res = await fetch(`https://api.search.brave.com/res/v1/web/search?${params.toString()}`, {
+      headers: {
+        Accept: 'application/json',
+        'X-Subscription-Token': env.BRAVE_API_KEY,
+      },
+      signal: controller.signal,
+    })
+  } catch (err: any) {
+    clearTimeout(timer)
+    const msg = err?.name === 'AbortError' ? `Timed out after ${timeoutMs}ms` : String(err?.message ?? err)
+    throw new WebSearchError(`Brave Search request failed: ${msg}`)
+  }
+  clearTimeout(timer)
 
   if (!res.ok) {
     const body = await res.text().catch(() => '')

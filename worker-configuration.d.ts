@@ -19,5 +19,5 @@ interface Env {
   // Brave Search API — used by web_search. Optional: fetch_url works without it,
   // web_search returns a clear configuration error if this is unset.
   // Set via `wrangler secret put BRAVE_API_KEY` (free tier: https://brave.com/search/api/)
-  BRAVE_API_KEY: string
+  BRAVE_API_KEY?: string
 }

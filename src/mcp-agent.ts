@@ -30,7 +30,7 @@ const kvKey = {
 export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
   server = new McpServer({
     name: 'GitHub Ops MCP Server',
-    version: '1.8.0',
+    version: '1.8.1',
   })
 
   private octokit(): Octokit {
@@ -118,7 +118,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       description: 'Delete a saved note permanently.',
       inputSchema: { name: z.string() },
       annotations: { title: 'Delete note', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
-    }, withErrorHandling(async ({ name }) => {
+    }, writeTool('delete_note', ({ name }) => `Deleted note "${name}"`, async ({ name }) => {
       await this.env.OAUTH_KV.delete(kvKey.note(props.login, name))
       return { content: [{ type: 'text', text: `Note "${name}" deleted.` }] }
     }))
@@ -914,10 +914,11 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       inputSchema: {
         query: z.string().describe('Search query'),
         count: z.number().min(1).max(20).default(5).describe('Number of results to return'),
+        timeout_ms: z.number().min(1000).max(30000).default(15000).describe('Request timeout in milliseconds'),
       },
       annotations: { title: 'Web search', readOnlyHint: true, openWorldHint: true },
-    }, withErrorHandling(async ({ query, count }) => {
-      const results = await webSearch(this.env, query, count)
+    }, withErrorHandling(async ({ query, count, timeout_ms }) => {
+      const results = await webSearch(this.env, query, count, timeout_ms)
       if (results.length === 0) return { content: [{ type: 'text', text: `No results found for: ${query}` }] }
       const text = results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.description}`).join('\n\n')
       return { content: [{ type: 'text', text: `Search results for "${query}":\n\n${text}` }] }
