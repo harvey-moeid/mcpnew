@@ -55,7 +55,7 @@ async function redirectToGitHub(
   const upstreamUrl = new URL('https://github.com/login/oauth/authorize')
   upstreamUrl.searchParams.set('client_id', env.GITHUB_CLIENT_ID)
   upstreamUrl.searchParams.set('redirect_uri', new URL('/callback', request.url).href)
-  upstreamUrl.searchParams.set('scope', 'repo read:user')
+  upstreamUrl.searchParams.set('scope', 'repo read:user workflow')
   upstreamUrl.searchParams.set('state', btoa(JSON.stringify(oauthReqInfo)))
 
   return new Response(null, {
