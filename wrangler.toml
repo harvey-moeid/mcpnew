@@ -51,5 +51,5 @@ custom_domain = true
 #   CLOUDFLARE_ACCOUNT_ID    <- used by get_worker_deployment_status + R2 tools (src/cloudflare.ts)
 #   BRAVE_API_KEY            <- optional, used by web_search (src/web.ts); fetch_url needs no key
 
-# Last manual deploy trigger: 2026-09-01 (secrets + D1 migration applied)
-# v1.8.0: added fetch_url + web_search (src/web.ts) — 2026-09-02
+# Last manual deploy trigger: 2026-09-02 (deps update + mojibake fix)
+# v2.0.0: updated all deps to latest (agents 0.22, MCP SDK 1.30, zod 4, wrangler 4.128)
