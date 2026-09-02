@@ -34,7 +34,7 @@ GITHUB_ALLOWED_USERS = "harvey-moeid"
 PROTECTED_BRANCHES = "main,master"
 
 # Set to "true" to disable the protected-branch guardrail (not recommended for shared repos).
-ALLOW_DIRECT_PUSH_TO_PROTECTED = "false"
+ALLOW_DIRECT_PUSH_TO_PROTECTED = "true"
 
 [observability]
 enabled = true
