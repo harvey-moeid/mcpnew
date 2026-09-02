@@ -34,6 +34,31 @@ function getCookie(request: Request, name: string): string | null {
 }
 
 /**
+ * Reads and verifies the signed "approved clients" cookie, returning the
+ * list of client ids it contains (or an empty array if missing/invalid).
+ * Shared by clientIdAlreadyApproved (read-only check) and
+ * parseRedirectApproval (merge-before-write), so both agree on what
+ * "already approved" means.
+ */
+async function readApprovedClients(request: Request, cookieSecret: string): Promise<string[]> {
+  const raw = getCookie(request, COOKIE_NAME)
+  if (!raw) return []
+
+  const [payload, signature] = raw.split('.')
+  if (!payload || !signature) return []
+
+  const valid = await verifyValue(payload, signature, cookieSecret)
+  if (!valid) return []
+
+  try {
+    const parsed = JSON.parse(atob(payload))
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+/**
  * Checks whether this browser has already approved the given OAuth client,
  * based on a signed cookie set after a previous approval. Avoids re-showing
  * the consent screen on every single connection attempt.
@@ -43,21 +68,8 @@ export async function clientIdAlreadyApproved(
   clientId: string,
   cookieSecret: string
 ): Promise<boolean> {
-  const raw = getCookie(request, COOKIE_NAME)
-  if (!raw) return false
-
-  const [payload, signature] = raw.split('.')
-  if (!payload || !signature) return false
-
-  const valid = await verifyValue(payload, signature, cookieSecret)
-  if (!valid) return false
-
-  try {
-    const approvedClients: string[] = JSON.parse(atob(payload))
-    return approvedClients.includes(clientId)
-  } catch {
-    return false
-  }
+  const approvedClients = await readApprovedClients(request, cookieSecret)
+  return approvedClients.includes(clientId)
 }
 
 interface ApprovalState {
@@ -115,7 +127,9 @@ export function renderApprovalDialog(
 
 /**
  * Parses the POSTed approval form and, on approval, returns headers that set
- * the "already approved" cookie for next time.
+ * the "already approved" cookie for next time. The new client id is merged
+ * with whatever was already in the cookie, so approving one client doesn't
+ * un-approve another.
  */
 export async function parseRedirectApproval(
   request: Request,
@@ -133,7 +147,9 @@ export async function parseRedirectApproval(
   const headers: Record<string, string> = {}
 
   if (action === 'approve' && state.oauthReqInfo?.clientId) {
-    const payload = btoa(JSON.stringify([state.oauthReqInfo.clientId]))
+    const existing = await readApprovedClients(request, cookieSecret)
+    const merged = Array.from(new Set([...existing, state.oauthReqInfo.clientId]))
+    const payload = btoa(JSON.stringify(merged))
     const signature = await signValue(payload, cookieSecret)
     headers['Set-Cookie'] =
       `${COOKIE_NAME}=${encodeURIComponent(`${payload}.${signature}`)}; ` +
