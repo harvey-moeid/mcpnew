@@ -12,6 +12,7 @@ import {
   putR2Object,
   deleteR2Object,
 } from './cloudflare'
+import { fetchUrl, webSearch } from './web'
 
 export type GitHubProps = {
   login: string
@@ -29,7 +30,7 @@ const kvKey = {
 export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
   server = new McpServer({
     name: 'GitHub Ops MCP Server',
-    version: '1.7.0',
+    version: '1.8.0',
   })
 
   private octokit(): Octokit {
@@ -772,7 +773,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     }))
 
     // -------------------------------------------------------------------------
-    // NEW v1.7.0: smoke_test, get_pr_preview_url, rerun_workflow
+    // v1.7.0: smoke_test, get_pr_preview_url, rerun_workflow
     // -------------------------------------------------------------------------
 
     this.server.registerTool('smoke_test', {
@@ -859,7 +860,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     this.server.registerTool('rerun_workflow', {
       description:
         'Re-run a specific GitHub Actions workflow run by its run_id. ' +
-        'Useful after a transient failure — re-triggers the same run without a new commit. ' +
+        'Useful after a transient failure - re-triggers the same run without a new commit. ' +
         'Use get_workflow_runs to find the run_id.',
       inputSchema: {
         owner: z.string().optional(),
@@ -877,6 +878,49 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       }
       const mode = failed_jobs_only ? 'failed jobs only' : 'all jobs'
       return { content: [{ type: 'text', text: `Re-running workflow run #${run_id} in ${r.owner}/${r.repo} (${mode}).` }] }
+    }))
+
+    // -------------------------------------------------------------------------
+    // v1.8.0: fetch_url, web_search — general internet access for Claude
+    // -------------------------------------------------------------------------
+
+    this.server.registerTool('fetch_url', {
+      description:
+        'Fetch a web page by URL and return its readable text content (HTML tags, scripts, and styles ' +
+        'stripped, entities decoded). Use this to read the content of a specific page, article, ' +
+        'documentation URL, or API endpoint. Non-HTML responses (JSON, plain text) are returned as-is.',
+      inputSchema: {
+        url: z.string().url().describe('The URL to fetch, e.g. "https://example.com/article"'),
+        max_length: z.number().min(500).max(30000).default(8000).describe('Max characters of extracted text to return'),
+        timeout_ms: z.number().min(1000).max(30000).default(15000).describe('Request timeout in milliseconds'),
+      },
+      annotations: { title: 'Fetch URL', readOnlyHint: true, openWorldHint: true },
+    }, withErrorHandling(async ({ url, max_length, timeout_ms }) => {
+      const result = await fetchUrl(url, { maxLength: max_length, timeoutMs: timeout_ms })
+      const header =
+        `URL         : ${result.url}\n` +
+        (result.finalUrl !== result.url ? `Final URL   : ${result.finalUrl}\n` : '') +
+        `Status      : ${result.status}\n` +
+        `Content-Type: ${result.contentType}\n` +
+        `Truncated   : ${result.truncated ? `yes (showing first ${max_length} chars)` : 'no'}\n\n`
+      return { content: [{ type: 'text', text: header + result.text }] }
+    }))
+
+    this.server.registerTool('web_search', {
+      description:
+        'Search the web for a query and return a list of results (title, URL, description). ' +
+        'Powered by the Brave Search API. Requires the BRAVE_API_KEY secret to be configured ' +
+        'on this Worker (`wrangler secret put BRAVE_API_KEY`); returns a clear error if missing.',
+      inputSchema: {
+        query: z.string().describe('Search query'),
+        count: z.number().min(1).max(20).default(5).describe('Number of results to return'),
+      },
+      annotations: { title: 'Web search', readOnlyHint: true, openWorldHint: true },
+    }, withErrorHandling(async ({ query, count }) => {
+      const results = await webSearch(this.env, query, count)
+      if (results.length === 0) return { content: [{ type: 'text', text: `No results found for: ${query}` }] }
+      const text = results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.description}`).join('\n\n')
+      return { content: [{ type: 'text', text: `Search results for "${query}":\n\n${text}` }] }
     }))
   }
 }
