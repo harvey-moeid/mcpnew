@@ -54,6 +54,32 @@ type StoredNote = {
   tags?: string[]
 }
 
+/**
+ * Fetch multiple KV keys with a bounded concurrency limit.
+ * Prevents overwhelming the KV API when there are many notes.
+ */
+async function fetchNotesWithConcurrency(
+  kv: KVNamespace,
+  keys: Array<{ name: string }>,
+  concurrency = 10
+): Promise<Array<{ key: string; note: StoredNote | null }>> {
+  const results: Array<{ key: string; note: StoredNote | null }> = []
+  for (let i = 0; i < keys.length; i += concurrency) {
+    const batch = keys.slice(i, i + concurrency)
+    const fetched = await Promise.all(
+      batch.map(async (k) => {
+        const raw = await kv.get(k.name)
+        return {
+          key: k.name,
+          note: raw ? (JSON.parse(raw) as StoredNote) : null,
+        }
+      })
+    )
+    results.push(...fetched)
+  }
+  return results
+}
+
 export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
   server = new McpServer({
     name: 'GitHub Ops MCP Server',
@@ -133,16 +159,17 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       const prefix = kvKey.notePrefix(props.login)
       const listed = await this.env.OAUTH_KV.list({ prefix })
       if (listed.keys.length === 0) return { content: [{ type: 'text', text: 'No notes saved yet.' }] }
-      const entries = await Promise.all(listed.keys.map(async (k) => {
-        const raw = await this.env.OAUTH_KV.get(k.name)
-        if (!raw) return null
-        const { content, updated_at, tags } = JSON.parse(raw) as StoredNote
-        const name = k.name.replace(prefix, '')
-        const preview = content.split('\n')[0].slice(0, 80)
-        const tagsLabel = tags && tags.length > 0 ? ` [${tags.join(', ')}]` : ''
-        return `${name}${tagsLabel}\n   Updated: ${updated_at}\n   Preview: ${preview}${content.length > 80 ? '...' : ''}`
-      }))
-      return { content: [{ type: 'text', text: `Notes (${listed.keys.length}):\n\n${entries.filter(Boolean).join('\n\n')}` }] }
+      // Fetch in batches of 10 to avoid hitting KV rate limits with large note counts.
+      const fetched = await fetchNotesWithConcurrency(this.env.OAUTH_KV, listed.keys)
+      const entries = fetched
+        .filter((f) => f.note !== null)
+        .map(({ key, note }) => {
+          const name = key.replace(prefix, '')
+          const preview = note!.content.split('\n')[0].slice(0, 80)
+          const tagsLabel = note!.tags && note!.tags.length > 0 ? ` [${note!.tags.join(', ')}]` : ''
+          return `${name}${tagsLabel}\n   Updated: ${note!.updated_at}\n   Preview: ${preview}${note!.content.length > 80 ? '...' : ''}`
+        })
+      return { content: [{ type: 'text', text: `Notes (${entries.length}):\n\n${entries.join('\n\n')}` }] }
     }))
 
     this.server.registerTool('search_notes', {
@@ -159,20 +186,22 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       const prefix = kvKey.notePrefix(props.login)
       const listed = await this.env.OAUTH_KV.list({ prefix })
       const q = query?.toLowerCase()
-      const results: string[] = []
-      for (const k of listed.keys) {
-        const raw = await this.env.OAUTH_KV.get(k.name)
-        if (!raw) continue
-        const { content, updated_at, tags: noteTags } = JSON.parse(raw) as StoredNote
-        const name = k.name.replace(prefix, '')
-        const matchesQuery = !q || name.toLowerCase().includes(q) || content.toLowerCase().includes(q)
-        const matchesTags = !tags || tags.length === 0 || (noteTags ?? []).some((t) => tags.includes(t))
-        if (matchesQuery && matchesTags) {
-          const preview = content.split('\n')[0].slice(0, 80)
-          const tagsLabel = noteTags && noteTags.length > 0 ? ` [${noteTags.join(', ')}]` : ''
-          results.push(`${name}${tagsLabel}\n   Updated: ${updated_at}\n   Preview: ${preview}${content.length > 80 ? '...' : ''}`)
-        }
-      }
+      // Fetch all notes in bounded-concurrency batches, then filter in-memory.
+      const fetched = await fetchNotesWithConcurrency(this.env.OAUTH_KV, listed.keys)
+      const results = fetched
+        .filter(({ key, note }) => {
+          if (!note) return false
+          const name = key.replace(prefix, '')
+          const matchesQuery = !q || name.toLowerCase().includes(q) || note.content.toLowerCase().includes(q)
+          const matchesTags = !tags || tags.length === 0 || (note.tags ?? []).some((t) => tags.includes(t))
+          return matchesQuery && matchesTags
+        })
+        .map(({ key, note }) => {
+          const name = key.replace(prefix, '')
+          const preview = note!.content.split('\n')[0].slice(0, 80)
+          const tagsLabel = note!.tags && note!.tags.length > 0 ? ` [${note!.tags.join(', ')}]` : ''
+          return `${name}${tagsLabel}\n   Updated: ${note!.updated_at}\n   Preview: ${preview}${note!.content.length > 80 ? '...' : ''}`
+        })
       if (results.length === 0) return { content: [{ type: 'text', text: 'No matching notes found.' }] }
       return { content: [{ type: 'text', text: `Found ${results.length} note(s):\n\n${results.join('\n\n')}` }] }
     }))
@@ -1203,7 +1232,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     }))
 
     this.server.registerTool('worker_secret_list', {
-      description: 'List the secrets attached to a Worker (names only — values are never returned by the API).',
+      description: 'List the secrets attached to a Worker (names only â values are never returned by the API).',
       inputSchema: { script_name: z.string().describe('Worker script name') },
       annotations: { title: 'Worker secret list', readOnlyHint: true, openWorldHint: true },
     }, withErrorHandling(async ({ script_name }) => {
@@ -1290,7 +1319,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       const projects = await listPagesProjects(this.env)
       if (projects.length === 0) return { content: [{ type: 'text', text: 'No Pages projects found.' }] }
       const text = projects.map((p) => {
-        const url = p.subdomain ? `  → https://${p.subdomain}` : ''
+        const url = p.subdomain ? `  â https://${p.subdomain}` : ''
         const status = p.latest_deployment?.latest_stage?.status ?? ''
         return `${p.name}${url}${status ? `  [${status}]` : ''}`
       }).join('\n')
@@ -1409,9 +1438,9 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
         comment: z.string().optional().describe('Optional note about this record'),
       },
       annotations: { title: 'Create DNS record', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-    }, writeTool('dns_record_create', ({ type, name, content }) => `Created ${type} record "${name}" → "${content}"`, async ({ zone_id, type, name, content, ttl, proxied, comment }) => {
+    }, writeTool('dns_record_create', ({ type, name, content }) => `Created ${type} record "${name}" â "${content}"`, async ({ zone_id, type, name, content, ttl, proxied, comment }) => {
       const record = await createDnsRecord(this.env, zone_id, { type, name, content, ttl, proxied, comment })
-      return { content: [{ type: 'text', text: `Created ${record.type} record: ${record.name} → ${record.content}\nID: ${record.id}` }] }
+      return { content: [{ type: 'text', text: `Created ${record.type} record: ${record.name} â ${record.content}\nID: ${record.id}` }] }
     }))
 
     this.server.registerTool('dns_record_update', {
@@ -1429,7 +1458,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       annotations: { title: 'Update DNS record', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     }, writeTool('dns_record_update', ({ record_id }) => `Updated DNS record ${record_id}`, async ({ zone_id, record_id, type, name, content, ttl, proxied, comment }) => {
       const record = await updateDnsRecord(this.env, zone_id, record_id, { type, name, content, ttl, proxied, comment })
-      return { content: [{ type: 'text', text: `Updated ${record.type} record: ${record.name} → ${record.content}\nID: ${record.id}` }] }
+      return { content: [{ type: 'text', text: `Updated ${record.type} record: ${record.name} â ${record.content}\nID: ${record.id}` }] }
     }))
 
     this.server.registerTool('dns_record_delete', {
