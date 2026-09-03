@@ -11,6 +11,25 @@ import {
   getR2Object,
   putR2Object,
   deleteR2Object,
+  // KV Namespaces
+  createKVNamespace, listKVNamespaces, deleteKVNamespace,
+  kvPut, kvGet, kvDelete, kvListKeys,
+  // D1 Databases
+  createD1Database, listD1Databases, deleteD1Database,
+  d1Query, d1Export,
+  // Workers management
+  listWorkers, deleteWorker,
+  workerSecretPut, workerSecretList, workerSecretDelete,
+  getWorkerSubdomain,
+  // R2 Bucket management
+  createR2Bucket, listR2Buckets, deleteR2Bucket,
+  // Pages
+  listPagesProjects, getPagesProject,
+  listPagesDeployments, triggerPagesDeployment,
+  // DNS / Zones
+  listZones, listDnsRecords, createDnsRecord, updateDnsRecord, deleteDnsRecord,
+  // Analytics
+  getWorkerAnalytics, getPagesAnalytics,
 } from './cloudflare'
 import { fetchUrl, webSearch } from './web'
 import { releaseChecklistPrompt, prReviewPrompt, repoCleanupPrompt } from './prompts'
@@ -38,7 +57,7 @@ type StoredNote = {
 export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
   server = new McpServer({
     name: 'GitHub Ops MCP Server',
-    version: '1.9.1',
+    version: '2.1.0',
   })
 
   private octokit(): Octokit {
@@ -943,6 +962,536 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       const text = results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.description}`).join('\n\n')
       return { content: [{ type: 'text', text: `Search results for "${query}":\n\n${text}` }] }
     }))
+
+    // -----------------------------------------------------------------------
+    // KV Namespace tools
+    // -----------------------------------------------------------------------
+
+    this.server.registerTool('kv_namespace_create', {
+      description: 'Create a new KV namespace. Returns the namespace ID needed for kv_put/kv_get/kv_delete/kv_list_keys.',
+      inputSchema: { title: z.string().describe('Namespace title (must be unique in account)') },
+      annotations: { title: 'Create KV namespace', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    }, writeTool('kv_namespace_create', ({ title }) => `Created KV namespace "${title}"`, async ({ title }) => {
+      const ns = await createKVNamespace(this.env, title)
+      return { content: [{ type: 'text', text: `Created KV namespace "${ns.title}"\nID: ${ns.id}` }] }
+    }))
+
+    this.server.registerTool('kv_namespace_list', {
+      description: 'List all KV namespaces in the account with their IDs.',
+      inputSchema: {},
+      annotations: { title: 'List KV namespaces', readOnlyHint: true, openWorldHint: true },
+    }, withErrorHandling(async () => {
+      const namespaces = await listKVNamespaces(this.env)
+      if (namespaces.length === 0) return { content: [{ type: 'text', text: 'No KV namespaces found.' }] }
+      const text = namespaces.map((ns) => `${ns.title.padEnd(40)} ${ns.id}`).join('\n')
+      return { content: [{ type: 'text', text: `KV Namespaces (${namespaces.length}):\n${'Title'.padEnd(40)} ID\n${'-'.repeat(80)}\n${text}` }] }
+    }))
+
+    this.server.registerTool('kv_namespace_delete', {
+      description: 'Delete a KV namespace and all its keys. Irreversible.',
+      inputSchema: { namespace_id: z.string().describe('KV namespace ID') },
+      annotations: { title: 'Delete KV namespace', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    }, writeTool('kv_namespace_delete', ({ namespace_id }) => `Deleted KV namespace ${namespace_id}`, async ({ namespace_id }) => {
+      await deleteKVNamespace(this.env, namespace_id)
+      return { content: [{ type: 'text', text: `Deleted KV namespace ${namespace_id}.` }] }
+    }))
+
+    this.server.registerTool('kv_put', {
+      description: 'Write a value to a KV namespace key. Overwrites if the key already exists.',
+      inputSchema: {
+        namespace_id: z.string().describe('KV namespace ID'),
+        key: z.string().describe('Key to write'),
+        value: z.string().describe('Value to store (text)'),
+        expiration_ttl: z.number().optional().describe('TTL in seconds from now (optional)'),
+        expiration: z.number().optional().describe('Unix timestamp when the key expires (optional)'),
+      },
+      annotations: { title: 'KV put', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    }, writeTool('kv_put', ({ namespace_id, key }) => `KV put key "${key}" in ${namespace_id}`, async ({ namespace_id, key, value, expiration_ttl, expiration }) => {
+      await kvPut(this.env, namespace_id, key, value, { expiration_ttl, expiration })
+      const ttlNote = expiration_ttl ? ` (TTL: ${expiration_ttl}s)` : expiration ? ` (expires: ${new Date(expiration * 1000).toISOString()})` : ''
+      return { content: [{ type: 'text', text: `Written key "${key}" to namespace ${namespace_id}${ttlNote}.` }] }
+    }))
+
+    this.server.registerTool('kv_get', {
+      description: 'Read a value from a KV namespace by key.',
+      inputSchema: {
+        namespace_id: z.string().describe('KV namespace ID'),
+        key: z.string().describe('Key to read'),
+      },
+      annotations: { title: 'KV get', readOnlyHint: true, openWorldHint: true },
+    }, withErrorHandling(async ({ namespace_id, key }) => {
+      const value = await kvGet(this.env, namespace_id, key)
+      if (value === null) return { content: [{ type: 'text', text: `Key "${key}" not found in namespace ${namespace_id}.` }] }
+      return { content: [{ type: 'text', text: `Key: ${key}\nNamespace: ${namespace_id}\n\n${value}` }] }
+    }))
+
+    this.server.registerTool('kv_delete', {
+      description: 'Delete a key from a KV namespace.',
+      inputSchema: {
+        namespace_id: z.string().describe('KV namespace ID'),
+        key: z.string().describe('Key to delete'),
+      },
+      annotations: { title: 'KV delete', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    }, writeTool('kv_delete', ({ namespace_id, key }) => `KV delete key "${key}" from ${namespace_id}`, async ({ namespace_id, key }) => {
+      await kvDelete(this.env, namespace_id, key)
+      return { content: [{ type: 'text', text: `Deleted key "${key}" from namespace ${namespace_id}.` }] }
+    }))
+
+    this.server.registerTool('kv_list_keys', {
+      description: 'List keys in a KV namespace. Supports prefix filtering and cursor-based pagination.',
+      inputSchema: {
+        namespace_id: z.string().describe('KV namespace ID'),
+        prefix: z.string().optional().describe('Filter keys by prefix'),
+        limit: z.number().min(1).max(1000).default(100).describe('Max keys to return'),
+        cursor: z.string().optional().describe('Cursor from a previous call for pagination'),
+      },
+      annotations: { title: 'KV list keys', readOnlyHint: true, openWorldHint: true },
+    }, withErrorHandling(async ({ namespace_id, prefix, limit, cursor }) => {
+      const result = await kvListKeys(this.env, namespace_id, { prefix, limit, cursor })
+      if (result.keys.length === 0) return { content: [{ type: 'text', text: 'No keys found.' }] }
+      const lines = result.keys.map((k) => {
+        const expiry = k.expiration ? `  [expires: ${new Date(k.expiration * 1000).toISOString()}]` : ''
+        return `${k.name}${expiry}`
+      })
+      const footer = result.list_complete ? '' : `\n\nMore results available. Next cursor: ${result.cursor}`
+      return { content: [{ type: 'text', text: `Keys in namespace ${namespace_id} (${result.keys.length}${result.list_complete ? '' : '+'}):\n\n${lines.join('\n')}${footer}` }] }
+    }))
+
+    // -----------------------------------------------------------------------
+    // D1 Database tools
+    // -----------------------------------------------------------------------
+
+    this.server.registerTool('d1_database_create', {
+      description: 'Create a new D1 database. Returns the UUID needed for subsequent queries.',
+      inputSchema: {
+        name: z.string().describe('Database name'),
+        location: z.string().optional().describe('Primary location hint: "weur", "enam", "apac"'),
+      },
+      annotations: { title: 'Create D1 database', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    }, writeTool('d1_database_create', ({ name }) => `Created D1 database "${name}"`, async ({ name, location }) => {
+      const db = await createD1Database(this.env, name, location)
+      const lines = [`Created D1 database: ${db.name}`, `UUID: ${db.uuid}`, db.created_at ? `Created: ${db.created_at}` : ''].filter(Boolean)
+      return { content: [{ type: 'text', text: lines.join('\n') }] }
+    }))
+
+    this.server.registerTool('d1_database_list', {
+      description: 'List all D1 databases in the account with their UUIDs.',
+      inputSchema: {},
+      annotations: { title: 'List D1 databases', readOnlyHint: true, openWorldHint: true },
+    }, withErrorHandling(async () => {
+      const dbs = await listD1Databases(this.env)
+      if (dbs.length === 0) return { content: [{ type: 'text', text: 'No D1 databases found.' }] }
+      const text = dbs.map((db) => {
+        const size = db.file_size ? ` (${(db.file_size / 1024).toFixed(1)} KB)` : ''
+        const tables = db.num_tables != null ? `  ${db.num_tables} tables` : ''
+        return `${db.name.padEnd(40)} ${db.uuid}${tables}${size}`
+      }).join('\n')
+      return { content: [{ type: 'text', text: `D1 Databases (${dbs.length}):\n${'Name'.padEnd(40)} UUID\n${'-'.repeat(80)}\n${text}` }] }
+    }))
+
+    this.server.registerTool('d1_database_delete', {
+      description: 'Delete a D1 database permanently. All data is lost.',
+      inputSchema: { database_id: z.string().describe('D1 database UUID') },
+      annotations: { title: 'Delete D1 database', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    }, writeTool('d1_database_delete', ({ database_id }) => `Deleted D1 database ${database_id}`, async ({ database_id }) => {
+      await deleteD1Database(this.env, database_id)
+      return { content: [{ type: 'text', text: `Deleted D1 database ${database_id}.` }] }
+    }))
+
+    this.server.registerTool('d1_query', {
+      description: 'Execute a SQL query on a D1 database. Supports SELECT, INSERT, UPDATE, DELETE, CREATE TABLE, etc.',
+      inputSchema: {
+        database_id: z.string().describe('D1 database UUID'),
+        sql: z.string().describe('SQL statement to execute'),
+        params: z.array(z.any()).optional().describe('Positional parameters for ? placeholders'),
+      },
+      annotations: { title: 'D1 query', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    }, writeTool('d1_query', ({ database_id, sql }) => `D1 query on ${database_id}: ${sql.slice(0, 80)}`, async ({ database_id, sql, params }) => {
+      const results = await d1Query(this.env, database_id, sql, params ?? [])
+      const parts: string[] = []
+      for (const result of results) {
+        const rows = result.results ?? []
+        const meta = result.meta ?? {}
+        if (rows.length > 0) {
+          const headers = Object.keys(rows[0])
+          const colW = Math.max(12, Math.floor(100 / Math.max(headers.length, 1)))
+          const headerRow = headers.map((h) => h.slice(0, colW).padEnd(colW)).join(' | ')
+          const divider = '-'.repeat(headerRow.length)
+          const dataRows = rows.slice(0, 100).map((row) =>
+            headers.map((h) => String(row[h] ?? '').slice(0, colW).padEnd(colW)).join(' | ')
+          )
+          const trunc = rows.length > 100 ? `\n... (${rows.length - 100} more rows not shown)` : ''
+          parts.push(`${headerRow}\n${divider}\n${dataRows.join('\n')}${trunc}`)
+        } else {
+          parts.push('(no rows returned)')
+        }
+        const metaParts: string[] = []
+        if (meta.changes != null) metaParts.push(`changes: ${meta.changes}`)
+        if (meta.rows_read != null) metaParts.push(`rows_read: ${meta.rows_read}`)
+        if (meta.rows_written != null) metaParts.push(`rows_written: ${meta.rows_written}`)
+        if (meta.duration != null) metaParts.push(`duration: ${meta.duration.toFixed(2)}ms`)
+        if (metaParts.length > 0) parts.push(`[${metaParts.join(', ')}]`)
+      }
+      return { content: [{ type: 'text', text: parts.join('\n\n') || '(query completed)' }] }
+    }))
+
+    this.server.registerTool('d1_export', {
+      description: 'Export the schema (and optionally data) of a D1 database as SQL INSERT statements.',
+      inputSchema: {
+        database_id: z.string().describe('D1 database UUID'),
+        include_data: z.boolean().default(false).describe('Also dump table data (max 500 rows per table)'),
+      },
+      annotations: { title: 'D1 export', readOnlyHint: true, openWorldHint: true },
+    }, withErrorHandling(async ({ database_id, include_data }) => {
+      const { schema, tables, data } = await d1Export(this.env, database_id, { includeData: include_data })
+      const parts: string[] = [`-- Schema (${tables.length} table(s))\n${schema}`]
+      if (include_data && data) {
+        for (const [tableName, rows] of Object.entries(data)) {
+          if (rows.length === 0) { parts.push(`-- Table: ${tableName} (empty)`); continue }
+          const inserts = rows.map((row) => {
+            const cols = Object.keys(row).map((k) => `"${k}"`).join(', ')
+            const vals = Object.values(row).map((v) =>
+              v === null ? 'NULL' : typeof v === 'number' ? String(v) : `'${String(v).replace(/'/g, "''")}'`
+            ).join(', ')
+            return `INSERT INTO "${tableName}" (${cols}) VALUES (${vals});`
+          })
+          parts.push(`-- Table: ${tableName} (${rows.length} rows${rows.length === 500 ? ', may be truncated' : ''})\n${inserts.join('\n')}`)
+        }
+      }
+      return { content: [{ type: 'text', text: parts.join('\n\n') }] }
+    }))
+
+    // -----------------------------------------------------------------------
+    // Workers management tools
+    // -----------------------------------------------------------------------
+
+    this.server.registerTool('worker_list', {
+      description: 'List all Cloudflare Workers deployed in the account.',
+      inputSchema: {},
+      annotations: { title: 'List Workers', readOnlyHint: true, openWorldHint: true },
+    }, withErrorHandling(async () => {
+      const workers = await listWorkers(this.env)
+      if (workers.length === 0) return { content: [{ type: 'text', text: 'No Workers found.' }] }
+      const text = workers.map((w) => {
+        const modified = w.modified_on ? `  modified: ${w.modified_on.slice(0, 10)}` : ''
+        const handlers = w.handlers?.length ? `  [${w.handlers.join(', ')}]` : ''
+        return `${w.id}${handlers}${modified}`
+      }).join('\n')
+      return { content: [{ type: 'text', text: `Workers (${workers.length}):\n\n${text}` }] }
+    }))
+
+    this.server.registerTool('worker_delete', {
+      description: 'Delete a Cloudflare Worker script. Permanently removes the Worker and all its deployments.',
+      inputSchema: { script_name: z.string().describe('Worker script name / ID') },
+      annotations: { title: 'Delete Worker', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    }, writeTool('worker_delete', ({ script_name }) => `Deleted Worker "${script_name}"`, async ({ script_name }) => {
+      await deleteWorker(this.env, script_name)
+      return { content: [{ type: 'text', text: `Deleted Worker "${script_name}".` }] }
+    }))
+
+    this.server.registerTool('worker_secret_put', {
+      description: 'Set a secret on a Worker. Creates or overwrites the named secret.',
+      inputSchema: {
+        script_name: z.string().describe('Worker script name'),
+        secret_name: z.string().describe('Secret name (env var key)'),
+        secret_value: z.string().describe('Secret value'),
+      },
+      annotations: { title: 'Worker secret put', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    }, writeTool('worker_secret_put', ({ script_name, secret_name }) => `Set secret "${secret_name}" on Worker "${script_name}"`, async ({ script_name, secret_name, secret_value }) => {
+      const result = await workerSecretPut(this.env, script_name, secret_name, secret_value)
+      return { content: [{ type: 'text', text: `Set secret "${result.name}" on Worker "${script_name}".` }] }
+    }))
+
+    this.server.registerTool('worker_secret_list', {
+      description: 'List the secrets attached to a Worker (names only — values are never returned by the API).',
+      inputSchema: { script_name: z.string().describe('Worker script name') },
+      annotations: { title: 'Worker secret list', readOnlyHint: true, openWorldHint: true },
+    }, withErrorHandling(async ({ script_name }) => {
+      const secrets = await workerSecretList(this.env, script_name)
+      if (secrets.length === 0) return { content: [{ type: 'text', text: `No secrets on Worker "${script_name}".` }] }
+      const text = secrets.map((s) => `${s.name}  [${s.type}]`).join('\n')
+      return { content: [{ type: 'text', text: `Secrets on Worker "${script_name}" (${secrets.length}):\n\n${text}` }] }
+    }))
+
+    this.server.registerTool('worker_secret_delete', {
+      description: 'Delete a secret from a Worker.',
+      inputSchema: {
+        script_name: z.string().describe('Worker script name'),
+        secret_name: z.string().describe('Secret name to delete'),
+      },
+      annotations: { title: 'Worker secret delete', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    }, writeTool('worker_secret_delete', ({ script_name, secret_name }) => `Deleted secret "${secret_name}" from Worker "${script_name}"`, async ({ script_name, secret_name }) => {
+      await workerSecretDelete(this.env, script_name, secret_name)
+      return { content: [{ type: 'text', text: `Deleted secret "${secret_name}" from Worker "${script_name}".` }] }
+    }))
+
+    this.server.registerTool('worker_subdomain_get', {
+      description: 'Get the workers.dev subdomain for this account (constructs *.workers.dev URLs).',
+      inputSchema: {},
+      annotations: { title: 'Get Worker subdomain', readOnlyHint: true, openWorldHint: true },
+    }, withErrorHandling(async () => {
+      const subdomain = await getWorkerSubdomain(this.env)
+      if (!subdomain) return { content: [{ type: 'text', text: 'No workers.dev subdomain configured.' }] }
+      return { content: [{ type: 'text', text: `workers.dev subdomain: ${subdomain}\n\nWorkers: <script-name>.${subdomain}.workers.dev` }] }
+    }))
+
+    // -----------------------------------------------------------------------
+    // R2 Bucket management tools
+    // -----------------------------------------------------------------------
+
+    this.server.registerTool('r2_bucket_create', {
+      description: 'Create a new R2 bucket.',
+      inputSchema: {
+        name: z.string().describe('Bucket name (unique within account)'),
+        location_hint: z.string().optional().describe('Location hint: "weur", "enam", "apac"'),
+      },
+      annotations: { title: 'Create R2 bucket', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    }, writeTool('r2_bucket_create', ({ name }) => `Created R2 bucket "${name}"`, async ({ name, location_hint }) => {
+      const bucket = await createR2Bucket(this.env, name, { locationHint: location_hint })
+      const lines = [`Created R2 bucket: ${bucket.name}`]
+      if (bucket.location) lines.push(`Location: ${bucket.location}`)
+      if (bucket.creation_date) lines.push(`Created: ${bucket.creation_date}`)
+      return { content: [{ type: 'text', text: lines.join('\n') }] }
+    }))
+
+    this.server.registerTool('r2_bucket_list', {
+      description: 'List all R2 buckets in the account.',
+      inputSchema: {},
+      annotations: { title: 'List R2 buckets', readOnlyHint: true, openWorldHint: true },
+    }, withErrorHandling(async () => {
+      const buckets = await listR2Buckets(this.env)
+      if (buckets.length === 0) return { content: [{ type: 'text', text: 'No R2 buckets found.' }] }
+      const text = buckets.map((b) => {
+        const loc = b.location ? `  [${b.location}]` : ''
+        const created = b.creation_date ? `  created: ${b.creation_date.slice(0, 10)}` : ''
+        return `${b.name}${loc}${created}`
+      }).join('\n')
+      return { content: [{ type: 'text', text: `R2 Buckets (${buckets.length}):\n\n${text}` }] }
+    }))
+
+    this.server.registerTool('r2_bucket_delete', {
+      description: 'Delete an R2 bucket. The bucket must be empty first.',
+      inputSchema: { name: z.string().describe('Bucket name') },
+      annotations: { title: 'Delete R2 bucket', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    }, writeTool('r2_bucket_delete', ({ name }) => `Deleted R2 bucket "${name}"`, async ({ name }) => {
+      await deleteR2Bucket(this.env, name)
+      return { content: [{ type: 'text', text: `Deleted R2 bucket "${name}".` }] }
+    }))
+
+    // -----------------------------------------------------------------------
+    // Pages tools
+    // -----------------------------------------------------------------------
+
+    this.server.registerTool('pages_project_list', {
+      description: 'List all Cloudflare Pages projects in the account.',
+      inputSchema: {},
+      annotations: { title: 'List Pages projects', readOnlyHint: true, openWorldHint: true },
+    }, withErrorHandling(async () => {
+      const projects = await listPagesProjects(this.env)
+      if (projects.length === 0) return { content: [{ type: 'text', text: 'No Pages projects found.' }] }
+      const text = projects.map((p) => {
+        const url = p.subdomain ? `  → https://${p.subdomain}` : ''
+        const status = p.latest_deployment?.latest_stage?.status ?? ''
+        return `${p.name}${url}${status ? `  [${status}]` : ''}`
+      }).join('\n')
+      return { content: [{ type: 'text', text: `Pages Projects (${projects.length}):\n\n${text}` }] }
+    }))
+
+    this.server.registerTool('pages_project_get', {
+      description: 'Get details of a Pages project: URL, deployment status, connected branch.',
+      inputSchema: { project_name: z.string().describe('Pages project name') },
+      annotations: { title: 'Get Pages project', readOnlyHint: true, openWorldHint: true },
+    }, withErrorHandling(async ({ project_name }) => {
+      const p = await getPagesProject(this.env, project_name)
+      const ld = p.latest_deployment
+      const lines: string[] = [
+        `Project   : ${p.name}`,
+        p.subdomain ? `URL       : https://${p.subdomain}` : '',
+        ...(p.domains?.length ? p.domains.map((d) => `Domain    : ${d}`) : []),
+      ].filter(Boolean)
+      if (ld) {
+        lines.push('', 'Latest deployment:')
+        if (ld.url) lines.push(`  URL     : ${ld.url}`)
+        if (ld.environment) lines.push(`  Env     : ${ld.environment}`)
+        if (ld.latest_stage?.status) lines.push(`  Status  : ${ld.latest_stage.status}`)
+        if (ld.deployment_trigger?.metadata?.branch) lines.push(`  Branch  : ${ld.deployment_trigger.metadata.branch}`)
+        if (ld.deployment_trigger?.metadata?.commit_hash) lines.push(`  Commit  : ${ld.deployment_trigger.metadata.commit_hash.slice(0, 7)}`)
+        if (ld.deployment_trigger?.metadata?.commit_message) lines.push(`  Message : ${ld.deployment_trigger.metadata.commit_message}`)
+      }
+      return { content: [{ type: 'text', text: lines.join('\n') }] }
+    }))
+
+    this.server.registerTool('pages_deployment_list', {
+      description: 'List recent deployments for a Pages project.',
+      inputSchema: {
+        project_name: z.string().describe('Pages project name'),
+        limit: z.number().min(1).max(25).default(10),
+      },
+      annotations: { title: 'List Pages deployments', readOnlyHint: true, openWorldHint: true },
+    }, withErrorHandling(async ({ project_name, limit }) => {
+      const deployments = await listPagesDeployments(this.env, project_name, limit)
+      if (deployments.length === 0) return { content: [{ type: 'text', text: `No deployments found for "${project_name}".` }] }
+      const text = deployments.map((d) => {
+        const status = d.latest_stage?.status ?? 'unknown'
+        const branch = d.deployment_trigger?.metadata?.branch ?? ''
+        const commit = d.deployment_trigger?.metadata?.commit_hash?.slice(0, 7) ?? ''
+        const msg = d.deployment_trigger?.metadata?.commit_message?.split('\n')[0].slice(0, 60) ?? ''
+        const url = d.url ? `  ${d.url}` : ''
+        return `[${status}] ${d.created_on.slice(0, 10)} ${branch}@${commit} ${msg}${url}`
+      }).join('\n')
+      return { content: [{ type: 'text', text: `Deployments for "${project_name}" (${deployments.length}):\n\n${text}` }] }
+    }))
+
+    this.server.registerTool('pages_deployment_trigger', {
+      description: 'Trigger a new deployment for a Pages project. Works for git-connected projects.',
+      inputSchema: {
+        project_name: z.string().describe('Pages project name'),
+        branch: z.string().optional().describe('Branch to deploy (default: production branch)'),
+      },
+      annotations: { title: 'Trigger Pages deployment', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    }, writeTool('pages_deployment_trigger', ({ project_name }) => `Triggered deployment for Pages project "${project_name}"`, async ({ project_name, branch }) => {
+      const deployment = await triggerPagesDeployment(this.env, project_name, branch)
+      const lines = [
+        `Triggered deployment for "${project_name}"`,
+        `Deployment ID: ${deployment.id}`,
+        deployment.url ? `URL: ${deployment.url}` : '',
+        deployment.environment ? `Environment: ${deployment.environment}` : '',
+        deployment.latest_stage?.status ? `Status: ${deployment.latest_stage.status}` : '',
+      ].filter(Boolean)
+      return { content: [{ type: 'text', text: lines.join('\n') }] }
+    }))
+
+    // -----------------------------------------------------------------------
+    // DNS / Zone tools
+    // -----------------------------------------------------------------------
+
+    this.server.registerTool('zone_list', {
+      description: 'List all domains/zones in the Cloudflare account.',
+      inputSchema: {},
+      annotations: { title: 'List zones', readOnlyHint: true, openWorldHint: true },
+    }, withErrorHandling(async () => {
+      const zones = await listZones(this.env)
+      if (zones.length === 0) return { content: [{ type: 'text', text: 'No zones found.' }] }
+      const text = zones.map((z) =>
+        `${z.name.padEnd(40)} ${z.id}  [${z.status}]${z.plan?.name ? `  ${z.plan.name}` : ''}`
+      ).join('\n')
+      return { content: [{ type: 'text', text: `Zones (${zones.length}):\n${'Domain'.padEnd(40)} Zone ID\n${'-'.repeat(80)}\n${text}` }] }
+    }))
+
+    this.server.registerTool('dns_record_list', {
+      description: 'List DNS records for a zone. Use zone_list to get the zone_id.',
+      inputSchema: {
+        zone_id: z.string().describe('Zone ID (from zone_list)'),
+        type: z.string().optional().describe('Filter by record type: A, AAAA, CNAME, TXT, MX, etc.'),
+        name: z.string().optional().describe('Filter by record name'),
+      },
+      annotations: { title: 'List DNS records', readOnlyHint: true, openWorldHint: true },
+    }, withErrorHandling(async ({ zone_id, type, name }) => {
+      const records = await listDnsRecords(this.env, zone_id, { type, name })
+      if (records.length === 0) return { content: [{ type: 'text', text: 'No DNS records found.' }] }
+      const text = records.map((r) => {
+        const proxied = r.proxied ? ' [proxied]' : ''
+        const ttl = r.ttl && r.ttl !== 1 ? ` TTL:${r.ttl}` : ''
+        return `${r.type.padEnd(6)} ${r.name.padEnd(40)} ${r.content}${proxied}${ttl}  id:${r.id}`
+      }).join('\n')
+      return { content: [{ type: 'text', text: `DNS Records (${records.length}):\n\n${text}` }] }
+    }))
+
+    this.server.registerTool('dns_record_create', {
+      description: 'Add a DNS record to a zone.',
+      inputSchema: {
+        zone_id: z.string().describe('Zone ID'),
+        type: z.enum(['A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS', 'SRV', 'CAA', 'PTR']).describe('Record type'),
+        name: z.string().describe('Record name (e.g. "www" or "@" for root)'),
+        content: z.string().describe('Record value (IP, hostname, text, etc.)'),
+        ttl: z.number().optional().describe('TTL in seconds (1 = auto/proxied)'),
+        proxied: z.boolean().optional().describe('Proxy through Cloudflare (orange cloud)'),
+        comment: z.string().optional().describe('Optional note about this record'),
+      },
+      annotations: { title: 'Create DNS record', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    }, writeTool('dns_record_create', ({ type, name, content }) => `Created ${type} record "${name}" → "${content}"`, async ({ zone_id, type, name, content, ttl, proxied, comment }) => {
+      const record = await createDnsRecord(this.env, zone_id, { type, name, content, ttl, proxied, comment })
+      return { content: [{ type: 'text', text: `Created ${record.type} record: ${record.name} → ${record.content}\nID: ${record.id}` }] }
+    }))
+
+    this.server.registerTool('dns_record_update', {
+      description: 'Update an existing DNS record. Pass only the fields you want to change.',
+      inputSchema: {
+        zone_id: z.string().describe('Zone ID'),
+        record_id: z.string().describe('DNS record ID (from dns_record_list)'),
+        type: z.string().optional(),
+        name: z.string().optional(),
+        content: z.string().optional(),
+        ttl: z.number().optional(),
+        proxied: z.boolean().optional(),
+        comment: z.string().optional(),
+      },
+      annotations: { title: 'Update DNS record', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    }, writeTool('dns_record_update', ({ record_id }) => `Updated DNS record ${record_id}`, async ({ zone_id, record_id, type, name, content, ttl, proxied, comment }) => {
+      const record = await updateDnsRecord(this.env, zone_id, record_id, { type, name, content, ttl, proxied, comment })
+      return { content: [{ type: 'text', text: `Updated ${record.type} record: ${record.name} → ${record.content}\nID: ${record.id}` }] }
+    }))
+
+    this.server.registerTool('dns_record_delete', {
+      description: 'Delete a DNS record from a zone.',
+      inputSchema: {
+        zone_id: z.string().describe('Zone ID'),
+        record_id: z.string().describe('DNS record ID (from dns_record_list)'),
+      },
+      annotations: { title: 'Delete DNS record', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    }, writeTool('dns_record_delete', ({ record_id }) => `Deleted DNS record ${record_id}`, async ({ zone_id, record_id }) => {
+      await deleteDnsRecord(this.env, zone_id, record_id)
+      return { content: [{ type: 'text', text: `Deleted DNS record ${record_id} from zone ${zone_id}.` }] }
+    }))
+
+    // -----------------------------------------------------------------------
+    // Analytics tools
+    // -----------------------------------------------------------------------
+
+    this.server.registerTool('worker_analytics', {
+      description: 'Get request count, error rate, and subrequest stats per hour for a Worker. Uses Cloudflare GraphQL Analytics API.',
+      inputSchema: {
+        script_name: z.string().describe('Worker script name'),
+        days: z.number().min(1).max(30).default(7).describe('Number of days to look back'),
+      },
+      annotations: { title: 'Worker analytics', readOnlyHint: true, openWorldHint: true },
+    }, withErrorHandling(async ({ script_name, days }) => {
+      const rows = await getWorkerAnalytics(this.env, script_name, days)
+      if (rows.length === 0) {
+        return { content: [{ type: 'text', text: `No analytics data for Worker "${script_name}" in the last ${days} day(s).` }] }
+      }
+      const totalReqs = rows.reduce((s, r) => s + r.requests, 0)
+      const totalErrors = rows.reduce((s, r) => s + r.errors, 0)
+      const errorRate = totalReqs > 0 ? ((totalErrors / totalReqs) * 100).toFixed(2) : '0.00'
+      const header = `Worker analytics: ${script_name} (last ${days} day(s))\nTotal requests: ${totalReqs.toLocaleString()}  Errors: ${totalErrors.toLocaleString()} (${errorRate}%)\n\n`
+      const lines = rows.map((r) => {
+        const errPct = r.requests > 0 ? `${((r.errors / r.requests) * 100).toFixed(1)}%` : '0.0%'
+        return `${r.datetime.slice(0, 13)}  req:${String(r.requests).padStart(8)}  err:${String(r.errors).padStart(6)} (${errPct.padStart(5)})  subreq:${r.subrequests}`
+      })
+      return { content: [{ type: 'text', text: header + lines.join('\n') }] }
+    }))
+
+    this.server.registerTool('pages_analytics', {
+      description: 'Get pageview analytics per day for a Pages project. Uses Cloudflare GraphQL Analytics API.',
+      inputSchema: {
+        project_name: z.string().describe('Pages project name'),
+        days: z.number().min(1).max(30).default(7).describe('Number of days to look back'),
+      },
+      annotations: { title: 'Pages analytics', readOnlyHint: true, openWorldHint: true },
+    }, withErrorHandling(async ({ project_name, days }) => {
+      const rows = await getPagesAnalytics(this.env, project_name, days)
+      if (rows.length === 0) {
+        return { content: [{ type: 'text', text: `No analytics data for Pages project "${project_name}" in the last ${days} day(s).` }] }
+      }
+      const totalPageviews = rows.reduce((s, r) => s + r.pageviews, 0)
+      const header = `Pages analytics: ${project_name} (last ${days} day(s))\nTotal pageviews: ${totalPageviews.toLocaleString()}\n\n`
+      const lines = rows.map((r) => `${r.date}  pageviews: ${String(r.pageviews).padStart(8)}`)
+      return { content: [{ type: 'text', text: header + lines.join('\n') }] }
+    }))
+
+    // -----------------------------------------------------------------------
+    // Prompts
+    // -----------------------------------------------------------------------
 
     this.server.registerPrompt('release-checklist', {
       title: 'Release checklist',
