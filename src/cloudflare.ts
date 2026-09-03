@@ -226,7 +226,7 @@ export async function getR2Object(
 
   const contentType = res.headers.get('content-type') ?? 'application/octet-stream'
   const content = await res.text()
-  return { content, contentType, size: content.length }
+  return { content, contentType, size: new TextEncoder().encode(content).length }
 }
 
 // ---------------------------------------------------------------------------
@@ -675,7 +675,7 @@ export async function triggerPagesDeployment(
 ): Promise<PagesDeploymentInfo> {
   return cfFetch<PagesDeploymentInfo>(env, `/pages/projects/${projectName}/deployments`, {
     method: 'POST',
-    body: branch ? JSON.stringify({ branch }) : undefined,
+    body: JSON.stringify(branch ? { branch } : {}),
   })
 }
 
