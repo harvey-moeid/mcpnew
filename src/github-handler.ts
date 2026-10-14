@@ -1,14 +1,32 @@
 import { Hono } from 'hono'
 import type { AuthRequest } from '@cloudflare/workers-oauth-provider'
 import { clientIdAlreadyApproved, parseRedirectApproval, renderApprovalDialog } from './utils'
+import { beginTransaction, consumeTransaction, createSession, isAllowedUser, sameOrigin } from './dashboard-auth'
+import { dashboardApi } from './dashboard-api'
+import { dashboardHtml, dashboardScript, dashboardStyles } from './dashboard-page'
 
 const app = new Hono<{ Bindings: Env }>()
 
-app.get('/', (c) =>
-  c.text(
-    'This is a remote MCP server. Add it as a custom connector in Claude — see the README for setup.'
-  )
-)
+app.use('*', async (c, next) => {
+  await next()
+  c.header('Cache-Control', 'no-store')
+  c.header('X-Content-Type-Options', 'nosniff')
+  c.header('Referrer-Policy', 'no-referrer')
+  c.header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https://avatars.githubusercontent.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'")
+})
+
+app.get('/', c => c.html(dashboardHtml))
+app.get('/dashboard', c => c.html(dashboardHtml))
+app.get('/dashboard/app.js', c => c.body(dashboardScript, 200, { 'Content-Type': 'text/javascript; charset=utf-8' }))
+app.get('/dashboard/style.css', c => c.body(dashboardStyles, 200, { 'Content-Type': 'text/css; charset=utf-8' }))
+app.route('/dashboard/api', dashboardApi)
+app.get('/dashboard/login', async c => {
+  if (!c.env.GITHUB_CLIENT_ID || !c.env.GITHUB_CLIENT_SECRET || !c.env.COOKIE_ENCRYPTION_KEY || !c.env.GITHUB_ALLOWED_USERS?.trim()) {
+    return c.text('Dashboard belum dikonfigurasi. Hubungi pengelola layanan.', 503)
+  }
+  const transaction = await beginTransaction(c.env, { kind: 'dashboard' })
+  return redirectToGitHub(c.req.raw, transaction.state, c.env, { 'Set-Cookie': transaction.cookie })
+})
 
 app.get('/authorize', async (c) => {
   const oauthReqInfo = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw)
@@ -20,12 +38,13 @@ app.get('/authorize', async (c) => {
     c.env.COOKIE_ENCRYPTION_KEY
   )
   if (alreadyApproved) {
-    return redirectToGitHub(c.req.raw, oauthReqInfo, c.env)
+    const transaction = await beginTransaction(c.env, { kind: 'mcp', request: oauthReqInfo })
+    return redirectToGitHub(c.req.raw, transaction.state, c.env, { 'Set-Cookie': transaction.cookie })
   }
 
   const client = await c.env.OAUTH_PROVIDER.lookupClient(oauthReqInfo.clientId)
-
-  return renderApprovalDialog(c.req.raw, {
+  const transaction = await beginTransaction(c.env, { kind: 'mcp', request: oauthReqInfo })
+  const response = renderApprovalDialog(c.req.raw, {
     client,
     server: {
       name: 'GitHub Ops MCP Server',
@@ -33,22 +52,44 @@ app.get('/authorize', async (c) => {
         'Lets Claude create repositories, push commits, open pull requests, and read files on your behalf, using your own GitHub account via OAuth.',
     },
     state: { oauthReqInfo },
+    stateToken: transaction.state,
   })
+  response.headers.set('Set-Cookie', transaction.cookie)
+  return response
 })
 
 app.post('/authorize', async (c) => {
-  const { state, headers } = await parseRedirectApproval(c.req.raw, c.env.COOKIE_ENCRYPTION_KEY)
-
-  if (!state.oauthReqInfo?.clientId) {
+  if (!sameOrigin(c.req.raw)) return c.text('Invalid approval origin', 403)
+  const form = await c.req.raw.formData()
+  const state = form.get('state')
+  const action = form.get('action')
+  const transaction = typeof state === 'string' ? await consumeTransaction(c.env, c.req.raw, state) : null
+  if (!transaction || transaction.transaction.kind !== 'mcp') {
     return c.text('Invalid or expired approval request. Please try connecting again.', 400)
   }
-
-  return redirectToGitHub(c.req.raw, state.oauthReqInfo, c.env, headers)
+  c.header('Set-Cookie', transaction.clearCookie)
+  const oauthReqInfo = transaction.transaction.request
+  if (action !== 'approve') {
+    const redirect = new URL(oauthReqInfo.redirectUri)
+    redirect.searchParams.set('error', 'access_denied')
+    if (oauthReqInfo.state) redirect.searchParams.set('state', oauthReqInfo.state)
+    return c.redirect(redirect.toString(), 302)
+  }
+  const approval = await parseRedirectApproval(new Request(c.req.url, {
+    method: 'POST', headers: { 'Cookie': c.req.header('Cookie') ?? '' },
+    body: new URLSearchParams({ action: 'approve', state: btoa(JSON.stringify({ oauthReqInfo })) }),
+  }), c.env.COOKIE_ENCRYPTION_KEY)
+  const upstream = await beginTransaction(c.env, { kind: 'mcp', request: oauthReqInfo })
+  const response = redirectToGitHub(c.req.raw, upstream.state, c.env)
+  response.headers.append('Set-Cookie', transaction.clearCookie)
+  response.headers.append('Set-Cookie', approval.headers['Set-Cookie'])
+  response.headers.append('Set-Cookie', upstream.cookie)
+  return response
 })
 
-async function redirectToGitHub(
+function redirectToGitHub(
   request: Request,
-  oauthReqInfo: AuthRequest,
+  state: string,
   env: Env,
   extraHeaders: Record<string, string> = {}
 ) {
@@ -56,7 +97,7 @@ async function redirectToGitHub(
   upstreamUrl.searchParams.set('client_id', env.GITHUB_CLIENT_ID)
   upstreamUrl.searchParams.set('redirect_uri', new URL('/callback', request.url).href)
   upstreamUrl.searchParams.set('scope', 'repo read:user workflow')
-  upstreamUrl.searchParams.set('state', btoa(JSON.stringify(oauthReqInfo)))
+  upstreamUrl.searchParams.set('state', state)
 
   return new Response(null, {
     status: 302,
@@ -68,23 +109,14 @@ app.get('/callback', async (c) => {
   const rawState = c.req.query('state')
   const code = c.req.query('code')
   const upstreamError = c.req.query('error')
-
-  if (upstreamError) {
-    return c.text(`GitHub denied the request: ${upstreamError}`, 400)
-  }
-  if (!rawState || !code) {
+  if (!rawState) {
     return c.text('Missing state or code from GitHub callback', 400)
   }
-
-  let oauthReqInfo: AuthRequest
-  try {
-    oauthReqInfo = JSON.parse(atob(rawState)) as AuthRequest
-  } catch {
-    return c.text('Invalid state parameter', 400)
-  }
-  if (!oauthReqInfo.clientId) {
-    return c.text('Invalid state: missing client_id', 400)
-  }
+  const transaction = await consumeTransaction(c.env, c.req.raw, rawState)
+  if (!transaction) return c.text('Invalid or expired login. Please start again.', 400)
+  c.header('Set-Cookie', transaction.clearCookie)
+  if (upstreamError) return c.text('GitHub login was cancelled. You can close this page or start again.', 400)
+  if (!code) return c.text('Missing code from GitHub callback', 400)
 
   const tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
     method: 'POST',
@@ -95,6 +127,7 @@ app.get('/callback', async (c) => {
       code,
       redirect_uri: new URL('/callback', c.req.url).href,
     }),
+    signal: AbortSignal.timeout(15000),
   })
 
   if (!tokenResponse.ok) {
@@ -112,20 +145,29 @@ app.get('/callback', async (c) => {
       'User-Agent': 'github-mcp-server',
       Accept: 'application/vnd.github+json',
     },
+    signal: AbortSignal.timeout(15000),
   })
   if (!userResponse.ok) {
     return c.text('Failed to fetch GitHub user profile', 502)
   }
-  const githubUser = await userResponse.json<{ login: string; name: string | null; id: number }>()
+  const githubUser = await userResponse.json<{ login: string; name: string | null; id: number; avatar_url: string }>()
 
   // Optional allowlist: restrict this server to specific GitHub usernames.
-  const allowedUsers = (c.env.GITHUB_ALLOWED_USERS ?? '')
-    .split(',')
-    .map((u) => u.trim().toLowerCase())
-    .filter(Boolean)
-  if (allowedUsers.length > 0 && !allowedUsers.includes(githubUser.login.toLowerCase())) {
+  if (!isAllowedUser(githubUser.login, c.env.GITHUB_ALLOWED_USERS, transaction.transaction.kind === 'dashboard')) {
     return c.text(`GitHub user "${githubUser.login}" is not authorized to use this server.`, 403)
   }
+
+  if (transaction.transaction.kind === 'dashboard') {
+    const sessionCookie = await createSession(c.env, {
+      login: githubUser.login, name: githubUser.name ?? githubUser.login,
+      avatarUrl: githubUser.avatar_url, accessToken: tokenBody.access_token,
+    })
+    const response = new Response(null, { status: 302, headers: { Location: '/dashboard' } })
+    response.headers.append('Set-Cookie', transaction.clearCookie)
+    response.headers.append('Set-Cookie', sessionCookie)
+    return response
+  }
+  const oauthReqInfo: AuthRequest = transaction.transaction.request
 
   const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
     request: oauthReqInfo,
@@ -139,7 +181,7 @@ app.get('/callback', async (c) => {
     },
   })
 
-  return Response.redirect(redirectTo)
+  return new Response(null, { status: 302, headers: { Location: redirectTo, 'Set-Cookie': transaction.clearCookie } })
 })
 
 export { app as GitHubHandler }

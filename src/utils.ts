@@ -20,10 +20,10 @@ async function signValue(value: string, secret: string): Promise<string> {
 }
 
 async function verifyValue(value: string, signature: string, secret: string): Promise<boolean> {
-  const expected = await signValue(value, secret)
-  // Not constant-time, but signature forgery risk here is low value
-  // (worst case: skip the "already approved" convenience dialog).
-  return expected === signature
+  try {
+    const bytes = Uint8Array.from(atob(signature), char => char.charCodeAt(0))
+    return crypto.subtle.verify('HMAC', await importHmacKey(secret), bytes, new TextEncoder().encode(value))
+  } catch { return false }
 }
 
 function getCookie(request: Request, name: string): string | null {
@@ -91,9 +91,10 @@ export function renderApprovalDialog(
     client: ClientInfo | null
     server: { name: string; description: string }
     state: ApprovalState
+    stateToken?: string
   }
 ): Response {
-  const encodedState = btoa(JSON.stringify(options.state))
+  const encodedState = options.stateToken ?? btoa(JSON.stringify(options.state))
   const clientName = options.client?.clientName ?? options.client?.clientId ?? 'An MCP client'
 
   const html = `<!doctype html>
