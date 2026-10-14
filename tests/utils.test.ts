@@ -103,6 +103,15 @@ test('tampered approval cookies are rejected', async () => {
   )
 })
 
+test('malformed approval cookies are rejected', async () => {
+  assert.equal(
+    await clientIdAlreadyApproved(
+      requestWithCookie('github_mcp_approved_clients=%'), 'client-1', SECRET
+    ),
+    false
+  )
+})
+
 test('approval dialog escapes untrusted client/server text', () => {
   const response = renderApprovalDialog(
     new Request('https://example.com/authorize'),
@@ -120,8 +129,8 @@ test('approval dialog escapes untrusted client/server text', () => {
 
   return response.text().then((html) => {
     assert.match(html, /&lt;Server&gt;/)
-    assert.match(html, /&lt;script&gt;alert(1)&lt;\/script&gt;/)
-    assert.doesNotMatch(html, /<script>alert(1)<\/script>/)
+    assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/)
+    assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/)
     assert.doesNotMatch(html, /<img src=x/)
   })
 })
