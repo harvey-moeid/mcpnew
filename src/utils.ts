@@ -30,7 +30,12 @@ function getCookie(request: Request, name: string): string | null {
   const cookieHeader = request.headers.get('Cookie')
   if (!cookieHeader) return null
   const match = cookieHeader.match(new RegExp(`(?:^|; )${name}=([^;]*)`))
-  return match ? decodeURIComponent(match[1]) : null
+  if (!match) return null
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    return null
+  }
 }
 
 /**
