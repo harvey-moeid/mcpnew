@@ -8,6 +8,9 @@ export { MyMCP }
 
 export default new OAuthProvider({
   apiRoute: '/mcp',
+  resourceMetadata: {
+    resource: 'https://mcpnew.muidsoft.com/mcp',
+  },
   apiHandler: MyMCP.serve('/mcp'),
   defaultHandler: GitHubHandler,
   authorizeEndpoint: '/authorize',
