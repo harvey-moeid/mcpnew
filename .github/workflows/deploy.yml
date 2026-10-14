@@ -35,6 +35,9 @@ jobs:
       - name: Type check
         run: npm run type-check
 
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v4
         with:

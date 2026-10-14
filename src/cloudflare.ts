@@ -34,6 +34,7 @@ async function cfFetch<T>(env: Env, path: string, options?: RequestInit): Promis
 
   const res = await fetch(`${CF_API_BASE}/accounts/${env.CLOUDFLARE_ACCOUNT_ID}${path}`, {
     ...options,
+    signal: options?.signal ?? AbortSignal.timeout(15000),
     headers: {
       Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
       'Content-Type': 'application/json',

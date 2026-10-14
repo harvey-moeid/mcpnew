@@ -10,10 +10,70 @@ ditempel di chat.
 1. Kamu tambahkan server ini sebagai **custom connector** di Claude
 2. Saat pertama connect, Claude membuka layar consent — kamu klik "Continue with GitHub"
 3. Kamu login/approve di GitHub (flow OAuth standar, sama seperti "Login with GitHub" di aplikasi lain)
-4. Server ini menyimpan token GitHub kamu **terenkripsi di dalam access token OAuth**
-   yang dipegang Claude — bukan disimpan sebagai teks di server, dan tidak pernah
-   terlihat di percakapan chat
-5. Setelah itu, Claude bisa panggil 39 tools yang tersedia (lihat tabel di bawah)
+4. Token GitHub dibawa sebagai props sesi OAuth yang dikelola oleh provider.
+   Token tidak ditampilkan di percakapan chat. Dashboard memiliki sesi terpisah
+   dengan token terenkripsi di KV.
+5. Setelah itu, Claude bisa memanggil tools yang tersedia (lihat tabel di bawah)
+
+## Dashboard pribadi
+
+Buka **https://mcpnew.muidsoft.com/dashboard** atau halaman utama, kemudian pilih
+**Masuk dengan GitHub**. Dashboard menggunakan OAuth App dan callback `/callback`
+yang sama dengan konektor MCP; tidak diperlukan PAT atau callback tambahan.
+
+- **Ringkasan:** jumlah repo yang sudah dimuat, hingga 30 PR terbuka terbaru pada
+  repo pilihan, pemeriksaan gagal, Actions, deployment Worker, dan audit terbaru.
+- **Repositori:** pencarian, filter publik/privat/arsip, pagination, dan pemilihan repo.
+- **Pull requests:** gabungan GitHub check runs dan commit statuses pada head PR;
+  filter status, draft, dan tautan review langsung ke GitHub. Status tidak tersedia
+  ditampilkan sebagai belum diketahui, bukan lolos.
+- **Deployment:** hingga 20 deployment Worker `github-mcp-server`, versi dan traffic rollout.
+- **Aktivitas:** audit D1 milik akun yang masuk, pagination, dan filter error. Audit
+  tetap best-effort sesuai perilaku tool MCP; daftar kosong bukan bukti tidak ada aksi.
+- **Koneksi & akses:** sesi, salin URL MCP, konfigurasi Cloudflare, dan status direct push.
+- Tema gelap/terang, navigasi mobile, dan shortcut `/` untuk mencari repo.
+
+Data privat hanya tersedia setelah login. Dashboard tidak menyediakan tombol merge,
+deploy, atau hapus: tindakan tersebut dibuka di GitHub atau dilakukan lewat tool MCP.
+Tidak ada token yang dikirim ke JavaScript dashboard atau disimpan di localStorage.
+
+### Autentikasi dashboard
+
+`GITHUB_ALLOWED_USERS` wajib berisi allowlist untuk login dashboard. Konfigurasi kosong
+menolak login dashboard. Secrets yang sudah dipakai MCP juga diperlukan:
+`GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, dan `COOKIE_ENCRYPTION_KEY`.
+
+Sesi browser memakai cookie `__Host-ops_session` (HttpOnly, Secure, SameSite=Lax)
+dan berlaku delapan jam. Token GitHub disimpan terenkripsi AES-GCM di `OAUTH_KV`
+dengan key berdasarkan hash session handle. Logout menghapus sesi; perubahan allowlist
+diperiksa pada setiap permintaan. Rotasi `COOKIE_ENCRYPTION_KEY` membatalkan sesi lama.
+KV memiliki konsistensi eventual, sehingga penghapusan dapat membutuhkan waktu untuk
+terpropagasi di lokasi lain; jangan menganggap logout sebagai pencabutan token GitHub.
+Untuk pencabutan menyeluruh, cabut OAuth App dari pengaturan GitHub.
+
+State consent/login berupa handle acak, terikat ke cookie browser, terenkripsi di KV,
+dan kedaluwarsa setelah sepuluh menit. State dihapus sebelum pertukaran kode GitHub
+(kode GitHub sendiri sekali pakai). Tombol Cancel mengembalikan `access_denied` ke klien.
+Alur login yang masih berjalan saat deploy perubahan ini harus dimulai kembali.
+
+Deployment memerlukan secrets Cloudflare yang sudah dijelaskan di bawah. Tanpa koneksi
+tersebut, dashboard tetap berjalan dan menampilkan status belum dikonfigurasi. Jika audit
+belum dapat dibaca, pastikan migration D1 `0001_create_audit_log.sql` sudah diterapkan.
+
+### Pemeriksaan sebelum rilis
+
+```bash
+npm ci
+npm test
+npm run type-check
+npm audit --audit-level=high
+npx wrangler deploy --dry-run
+```
+
+Tes mencakup isolasi sesi dan allowlist, enkripsi token, state browser/expiry,
+callback palsu, Cancel, alur MCP, validasi API, dan pembatasan audit per pengguna.
+Setelah deploy, cek `/`, `/dashboard`, discovery OAuth, dan `/mcp` tanpa token (`401`),
+kemudian uji login GitHub serta satu operasi MCP dengan akun yang diizinkan.
 
 ## Setup — Langkah demi Langkah
 
@@ -22,9 +82,9 @@ ditempel di chat.
 1. Buka https://github.com/settings/developers — **OAuth Apps** — **New OAuth App**
 2. Isi:
    - **Application name**: `GitHub Ops MCP Server` (bebas)
-   - **Homepage URL**: `https://github-mcp-server.<subdomain-kamu>.workers.dev`
-   - **Authorization callback URL**: `https://github-mcp-server.<subdomain-kamu>.workers.dev/callback`
-     (kamu baru tahu subdomain pastinya setelah deploy pertama kali — bisa diedit lagi nanti)
+   - **Homepage URL**: `https://mcpnew.muidsoft.com`
+   - **Authorization callback URL**: `https://mcpnew.muidsoft.com/callback`
+     (sesuaikan domain dan `resourceMetadata.resource` jika menggunakan instalasi lain)
 3. Setelah dibuat, catat **Client ID**, lalu klik **Generate a new client secret** dan catat itu juga
 
 ### 2. Buat KV Namespace + D1 Database (lewat Cloudflare Dashboard, tanpa CLI)
@@ -85,7 +145,7 @@ npm install
 npm run deploy
 ```
 
-Setelah deploy, kamu akan dapat URL seperti `https://github-mcp-server.<subdomain>.workers.dev`.
+Setelah deploy, kamu akan dapat URL seperti `https://mcpnew.muidsoft.com`.
 **Update callback URL di GitHub OAuth App** (langkah 1) kalau subdomain-nya beda dari perkiraan awal.
 
 ### 5. Connect ke Claude
@@ -93,12 +153,12 @@ Setelah deploy, kamu akan dapat URL seperti `https://github-mcp-server.<subdomai
 1. Buka **claude.ai — Customize — Connectors**
 2. Klik **+** — **Add custom connector**
 3. **Name**: `GitHub Ops`
-4. **URL**: `https://github-mcp-server.<subdomain>.workers.dev/mcp`
+4. **URL**: `https://mcpnew.muidsoft.com/mcp`
 5. Klik **Add** — Claude akan otomatis melakukan Dynamic Client Registration ke endpoint `/register`
 6. Ikuti flow OAuth (redirect ke halaman consent server ini — lalu ke GitHub — approve)
 7. Selesai — di percakapan manapun, aktifkan connector "GitHub Ops" dan Claude bisa langsung push/buat repo
 
-## Tools yang Tersedia (v1.7.0 — 39 tools)
+## Tools yang Tersedia
 
 **Memory / konteks lintas sesi** (tersimpan di KV `OAUTH_KV`, per-user):
 
@@ -245,7 +305,7 @@ on:
 ## Keamanan
 
 - Token GitHub kamu **tidak pernah** diketik di chat atau disimpan sebagai plaintext di server
-- Scope OAuth yang diminta: `repo` (akses baca/tulis repo) dan `read:user`
+- Scope OAuth yang diminta: `repo` (akses baca/tulis repo), `read:user`, dan `workflow`
 - Token Cloudflare untuk `get_worker_deployment_status`/tool R2 sebaiknya dibuat scoped
   (**Workers Scripts:Read** + **R2:Read**/**R2:Write** sesuai kebutuhan), bukan Global API Key
 - Kalau mau cabut akses: GitHub — **Settings — Applications — Authorized OAuth Apps** —
