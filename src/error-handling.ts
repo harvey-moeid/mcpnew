@@ -39,12 +39,16 @@ function describeError(err: unknown): string {
 
   if (err instanceof CloudflareApiError) {
     switch (err.status) {
+      case 400:
+        return `Cloudflare rejected the parameters (400): ${err.message}. Check resource identifiers, pagination values and request format for this tool.`
+      case 429:
+        return 'Cloudflare rate limit reached (429). Wait before retrying; avoid repeating write operations blindly.'
       case 401:
         return 'Cloudflare rejected the request (401): CLOUDFLARE_API_TOKEN is missing, invalid, or expired.'
       case 403:
-        return `Cloudflare denied this action (403): ${err.message || 'the token is missing the required permission (Workers Scripts:Read).'}`
+        return `Cloudflare denied this action (403): ${err.message || 'the token lacks the permission or resource scope required by this tool.'}`
       case 404:
-        return `Cloudflare returned 404 \u2014 check the Worker script name and CLOUDFLARE_ACCOUNT_ID.`
+        return `Cloudflare returned 404 \u2014 check the resource identifier, account/zone ID, and token resource scope.`
       default:
         return `Cloudflare API error (${err.status}): ${err.message}`
     }

@@ -236,8 +236,7 @@ create_branch -> push_files (ke branch baru) -> create_pull_request -> merge_pul
 Kalau memang perlu direct push ke branch protected (biasanya gak disarankan untuk repo tim),
 set `ALLOW_DIRECT_PUSH_TO_PROTECTED = "true"` di `wrangler.toml`.
 
-> **Status di repo ini:** `ALLOW_DIRECT_PUSH_TO_PROTECTED` sedang **aktif (`"true"`)**, karena
-> ini repo single-user (`GITHUB_ALLOWED_USERS = "harvey-moeid"`). Push langsung ke `main` diizinkan.
+> **Status di repo ini:** `ALLOW_DIRECT_PUSH_TO_PROTECTED = "false"`. Gunakan branch fitur dan pull request untuk perubahan ke `main`.
 
 ## Audit Log
 
@@ -321,3 +320,26 @@ npm run dev
 
 `wrangler dev` akan jalan di `http://localhost:8787`. Untuk testing OAuth lokal, buat
 GitHub OAuth App kedua dengan callback URL `http://localhost:8787/callback`.
+
+
+## Operation safety and deployment
+
+Repository write tools require explicit `owner` and `repo`; saved defaults apply only to reads.
+Destructive tools require `confirm` equal to the exact target described by each tool. This is a server-side target check, not proof of human approval; clients must still obtain user authorization.
+Examples: `owner/repo@branch` for branch deletion, `owner/repo@branch:path` for file deletion,
+`owner/repo#123` for PR merge, and the exact resource ID/name for namespace/database/Worker/bucket deletion.
+
+`deploy_and_push` requires an explicit branch. With `wait: true`, it tracks a workflow_dispatch run for the pushed commit and dispatch time. An optional `smoke_test_url` runs only after workflow success; `expected_text` checks response content. A timeout does not cancel or revert the deployment. Push and dispatch are separate GitHub operations; dispatch failure does not undo the commit.
+`wait_for_workflow` requires `run_id` or `commit_sha` so an old run cannot accidentally report success.
+`smoke_test` supports bounded retries, response text matching (first 1 MiB), and attempt timings.
+
+`worker_rollback` deploys an explicitly selected existing version to all traffic, requiring confirmation of `script_name:version_id`. It does not revert GitHub commits, D1/KV data, migrations, or other external changes; no automatic rollback is attempted.
+`cloudflare_token_verify` supports user/account token types and reports validity/expiry, not a complete permission inventory.
+Pages list tools expose explicit page selection; requests default to page 1 with 10 results.
+
+Compatibility changes: refresh/reconnect MCP tool discovery after updating the server. Existing calls to write tools must now include the explicit repository and destructive confirmations. PR merges also require `expected_head_sha` from the reviewed PR, so a changed PR cannot be merged accidentally. Audit reads are restricted to the signed-in actor and support `before_id` pagination; secret values and D1 SQL/parameters are omitted from audit summaries. Audit persistence remains best effort.
+
+`worker_list` accepts an optional `script_name` for custom domains, binding names/types, cron schedules and latest deployment metadata. Missing API permissions produce an `unavailable` list while preserving other metadata. Zone-based Worker routes are not included. `get_worker_deployment_status` includes recent version IDs for explicit rollback.
+GitHub lists support `page`; notes use `cursor`; KV/D1/zone/DNS lists support `page`; R2 bucket lists use `start_after`. Workers script listing has no page parameter in the current Cloudflare API spec.
+
+Validation uses mocked API responses and the registered tool handlers. A real-account reproduction is still needed to confirm the original Pages 400; support for `page`/`per_page` is documented by Cloudflare, so pagination alone does not prove its cause.

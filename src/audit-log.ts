@@ -20,7 +20,7 @@ export function withAudit<Args>(
         .prepare(
           'INSERT INTO audit_log (actor, tool, summary, is_error) VALUES (?, ?, ?, ?)'
         )
-        .bind(actor, toolName, summarize(args, result), result.isError ? 1 : 0)
+        .bind(actor, toolName, `${result.isError ? 'FAILED: ' : ''}${summarize(args, result)}`, result.isError ? 1 : 0)
         .run()
     } catch {
       // Never let audit logging failures surface to the model/user —

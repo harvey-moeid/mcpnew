@@ -1,3 +1,4 @@
+import { requireConfirmation, waitForRun, probeUrl } from './operations'
 import { McpAgent } from 'agents/mcp'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { Octokit } from 'octokit'
@@ -18,13 +19,13 @@ import {
   createD1Database, listD1Databases, deleteD1Database,
   d1Query, d1Export,
   // Workers management
-  listWorkers, deleteWorker,
+  listWorkers, deleteWorker, workerDetails,
   workerSecretPut, workerSecretList, workerSecretDelete,
   getWorkerSubdomain,
   // R2 Bucket management
   createR2Bucket, listR2Buckets, deleteR2Bucket,
   // Pages
-  listPagesProjects, getPagesProject,
+  listPagesProjects, getPagesProject, rollbackWorker, verifyCloudflareToken,
   listPagesDeployments, triggerPagesDeployment,
   // DNS / Zones
   listZones, listDnsRecords, createDnsRecord, updateDnsRecord, deleteDnsRecord,
@@ -131,7 +132,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
         tags: z.array(z.string()).optional().describe('Optional tags for grouping/filtering, e.g. ["mcpnew", "todo"]'),
       },
       annotations: { title: 'Set note', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    }, withErrorHandling(async ({ name, content, tags }) => {
+    }, writeTool('set_note', ({ name }) => `Saved note ${name}`, async ({ name, content, tags }) => {
       const key = kvKey.note(props.login, name)
       const note: StoredNote = { content, updated_at: new Date().toISOString(), actor: props.login, tags: tags ?? [] }
       await this.env.OAUTH_KV.put(key, JSON.stringify(note))
@@ -153,12 +154,12 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
 
     this.server.registerTool('list_notes', {
       description: 'List all saved notes.',
-      inputSchema: {},
+      inputSchema: { cursor: z.string().optional().describe('Next cursor from the previous page'), limit: z.number().int().min(1).max(100).default(50) },
       annotations: { title: 'List notes', readOnlyHint: true, openWorldHint: false },
-    }, withErrorHandling(async () => {
+    }, withErrorHandling(async ({ cursor, limit }) => {
       const prefix = kvKey.notePrefix(props.login)
-      const listed = await this.env.OAUTH_KV.list({ prefix })
-      if (listed.keys.length === 0) return { content: [{ type: 'text', text: 'No notes saved yet.' }] }
+      const listed = await this.env.OAUTH_KV.list({ prefix, cursor, limit })
+
       // Fetch in batches of 10 to avoid hitting KV rate limits with large note counts.
       const fetched = await fetchNotesWithConcurrency(this.env.OAUTH_KV, listed.keys)
       const entries = fetched
@@ -169,22 +170,23 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
           const tagsLabel = note!.tags && note!.tags.length > 0 ? ` [${note!.tags.join(', ')}]` : ''
           return `${name}${tagsLabel}\n   Updated: ${note!.updated_at}\n   Preview: ${preview}${note!.content.length > 80 ? '...' : ''}`
         })
-      return { content: [{ type: 'text', text: `Notes (${entries.length}):\n\n${entries.join('\n\n')}` }] }
+      return { content: [{ type: 'text', text: `Notes (${entries.length}):\n\n${entries.join('\n\n')}\nNext cursor: ${listed.list_complete ? 'none' : listed.cursor}` }] }
     }))
 
     this.server.registerTool('search_notes', {
       description: 'Search saved notes by text (matches note name or content, case-insensitive) and/or by tag. Provide a query, tags, or both.',
       inputSchema: {
+        cursor: z.string().optional(), limit: z.number().int().min(1).max(100).default(50),
         query: z.string().optional().describe('Substring to search for in the note name or content'),
         tags: z.array(z.string()).optional().describe('Only include notes that have at least one of these tags'),
       },
       annotations: { title: 'Search notes', readOnlyHint: true, openWorldHint: false },
-    }, withErrorHandling(async ({ query, tags }) => {
+    }, withErrorHandling(async ({ query, tags, cursor, limit }) => {
       if (!query && (!tags || tags.length === 0)) {
         return { content: [{ type: 'text', text: 'Provide a query and/or tags to search for.' }], isError: true }
       }
       const prefix = kvKey.notePrefix(props.login)
-      const listed = await this.env.OAUTH_KV.list({ prefix })
+      const listed = await this.env.OAUTH_KV.list({ prefix, cursor, limit })
       const q = query?.toLowerCase()
       // Fetch all notes in bounded-concurrency batches, then filter in-memory.
       const fetched = await fetchNotesWithConcurrency(this.env.OAUTH_KV, listed.keys)
@@ -202,15 +204,17 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
           const tagsLabel = note!.tags && note!.tags.length > 0 ? ` [${note!.tags.join(', ')}]` : ''
           return `${name}${tagsLabel}\n   Updated: ${note!.updated_at}\n   Preview: ${preview}${note!.content.length > 80 ? '...' : ''}`
         })
-      if (results.length === 0) return { content: [{ type: 'text', text: 'No matching notes found.' }] }
-      return { content: [{ type: 'text', text: `Found ${results.length} note(s):\n\n${results.join('\n\n')}` }] }
+
+      return { content: [{ type: 'text', text: `Found ${results.length} note(s):\n\n${results.join('\n\n')}\nNext cursor: ${listed.list_complete ? 'none' : listed.cursor}` }] }
     }))
 
     this.server.registerTool('delete_note', {
-      description: 'Delete a saved note permanently.',
-      inputSchema: { name: z.string() },
+      description: 'Requires confirm equal to name. Delete a saved note permanently.',
+      inputSchema: {
+        confirm: z.string().describe("Exact target to confirm deletion/merge; see tool description"), name: z.string() },
       annotations: { title: 'Delete note', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
-    }, writeTool('delete_note', ({ name }) => `Deleted note "${name}"`, async ({ name }) => {
+    }, writeTool('delete_note', ({ name }) => `Deleted note "${name}"`, async ({ name, confirm }) => {
+      requireConfirmation(confirm, name)
       await this.env.OAUTH_KV.delete(kvKey.note(props.login, name))
       return { content: [{ type: 'text', text: `Note "${name}" deleted.` }] }
     }))
@@ -222,7 +226,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
         repo: z.string(),
       },
       annotations: { title: 'Set default repo', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    }, withErrorHandling(async ({ owner, repo }) => {
+    }, writeTool('set_default_repo', ({ owner, repo }) => `Set default repo ${owner}/${repo}`, async ({ owner, repo }) => {
       await this.env.OAUTH_KV.put(kvKey.defaultRepo(props.login), `${owner}/${repo}`)
       return { content: [{ type: 'text', text: `Default repo set to ${owner}/${repo}.` }] }
     }))
@@ -248,11 +252,12 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       description: 'List repositories owned by the authenticated user.',
       inputSchema: {
         type: z.enum(['all', 'owner', 'member']).default('owner'),
-        per_page: z.number().min(1).max(50).default(20),
+        page: z.number().int().positive().default(1).describe('Results page, starting at 1'),
+        per_page: z.number().int().min(1).max(50).default(20),
       },
       annotations: { title: 'List repositories', readOnlyHint: true, openWorldHint: true },
-    }, withErrorHandling(async ({ type, per_page }) => {
-      const { data } = await octokit.rest.repos.listForAuthenticatedUser({ type, per_page, sort: 'updated' })
+    }, withErrorHandling(async ({ type, page, per_page }) => {
+      const { data } = await octokit.rest.repos.listForAuthenticatedUser({ type, page, per_page, sort: 'updated' })
       const text = data.map((r) => `${r.private ? '[private]' : '[public]'} ${r.full_name} - ${r.html_url}`).join('\n')
       return { content: [{ type: 'text', text: text || 'No repositories found.' }] }
     }))
@@ -286,12 +291,13 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
         owner: z.string().optional(),
         repo: z.string().optional(),
         branch: z.string().optional(),
-        per_page: z.number().min(1).max(50).default(10),
+        page: z.number().int().positive().default(1).describe('Results page, starting at 1'),
+        per_page: z.number().int().min(1).max(50).default(10),
       },
       annotations: { title: 'List commits', readOnlyHint: true, openWorldHint: true },
-    }, withErrorHandling(async ({ owner, repo, branch, per_page }) => {
+    }, withErrorHandling(async ({ owner, repo, branch, page, per_page }) => {
       const r = await this.resolveRepo(owner, repo)
-      const { data } = await octokit.rest.repos.listCommits({ ...r, sha: branch, per_page })
+      const { data } = await octokit.rest.repos.listCommits({ ...r, sha: branch, page, per_page })
       const text = data.map((c) => `${c.sha.slice(0, 7)}  ${c.commit.message.split('\n')[0]}`).join('\n')
       return { content: [{ type: 'text', text: text || 'No commits found.' }] }
     }))
@@ -302,12 +308,13 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
         owner: z.string().optional(),
         repo: z.string().optional(),
         state: z.enum(['open', 'closed', 'all']).default('open'),
-        per_page: z.number().min(1).max(50).default(20),
+        page: z.number().int().positive().default(1).describe('Results page, starting at 1'),
+        per_page: z.number().int().min(1).max(50).default(20),
       },
       annotations: { title: 'List issues', readOnlyHint: true, openWorldHint: true },
-    }, withErrorHandling(async ({ owner, repo, state, per_page }) => {
+    }, withErrorHandling(async ({ owner, repo, state, page, per_page }) => {
       const r = await this.resolveRepo(owner, repo)
-      const { data } = await octokit.rest.issues.listForRepo({ ...r, state, per_page })
+      const { data } = await octokit.rest.issues.listForRepo({ ...r, state, page, per_page })
       const issuesOnly = data.filter((i) => !i.pull_request)
       const text = issuesOnly.map((i) => `#${i.number} [${i.state}] ${i.title} - ${i.html_url}`).join('\n')
       return { content: [{ type: 'text', text: text || 'No issues found.' }] }
@@ -319,12 +326,13 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
         owner: z.string().optional(),
         repo: z.string().optional(),
         state: z.enum(['open', 'closed', 'all']).default('open'),
-        per_page: z.number().min(1).max(50).default(20),
+        page: z.number().int().positive().default(1).describe('Results page, starting at 1'),
+        per_page: z.number().int().min(1).max(50).default(20),
       },
       annotations: { title: 'List pull requests', readOnlyHint: true, openWorldHint: true },
-    }, withErrorHandling(async ({ owner, repo, state, per_page }) => {
+    }, withErrorHandling(async ({ owner, repo, state, page, per_page }) => {
       const r = await this.resolveRepo(owner, repo)
-      const { data } = await octokit.rest.pulls.list({ ...r, state, per_page })
+      const { data } = await octokit.rest.pulls.list({ ...r, state, page, per_page })
       if (data.length === 0) return { content: [{ type: 'text', text: 'No pull requests found.' }] }
       const text = data.map((pr) => `#${pr.number} [${pr.state}] ${pr.title}\n  ${pr.head.ref} -> ${pr.base.ref} | by ${pr.user?.login ?? 'unknown'}\n  ${pr.html_url}`).join('\n\n')
       return { content: [{ type: 'text', text: text }] }
@@ -360,11 +368,12 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       description: 'Search for a code pattern or filename across one or all repositories.',
       inputSchema: {
         query: z.string(),
-        per_page: z.number().min(1).max(30).default(10),
+        page: z.number().int().positive().default(1).describe('Results page, starting at 1'),
+        per_page: z.number().int().min(1).max(30).default(10),
       },
       annotations: { title: 'Search code', readOnlyHint: true, openWorldHint: true },
-    }, withErrorHandling(async ({ query, per_page }) => {
-      const { data } = await octokit.rest.search.code({ q: query, per_page, mediaType: { previews: ['text-match'] } } as any)
+    }, withErrorHandling(async ({ query, page, per_page }) => {
+      const { data } = await octokit.rest.search.code({ q: query, page, per_page, mediaType: { previews: ['text-match'] } } as any)
       if (data.total_count === 0) return { content: [{ type: 'text', text: `No results found for: ${query}` }] }
       const lines = data.items.map((item: any) => {
         const snippet = item.text_matches?.[0]?.fragment?.slice(0, 120).replace(/\n/g, ' ') ?? ''
@@ -429,13 +438,15 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
         actor: z.string().optional(),
         tool: z.string().optional(),
         errors_only: z.boolean().default(false),
+        before_id: z.number().int().positive().optional().describe('Read older entries before this audit ID'),
       },
       annotations: { title: 'Get audit log', readOnlyHint: true, openWorldHint: false },
-    }, withErrorHandling(async ({ limit, actor, tool, errors_only }) => {
-      const conditions: string[] = []
-      const bindings: (string | number)[] = []
-      if (actor) { conditions.push('actor = ?'); bindings.push(actor) }
+    }, withErrorHandling(async ({ limit, actor, tool, errors_only, before_id }) => {
+      if (actor && actor !== props.login) throw new Error('You can only read your own audit entries.')
+      const conditions: string[] = ['actor = ?']
+      const bindings: (string | number)[] = [props.login]
       if (tool) { conditions.push('tool = ?'); bindings.push(tool) }
+      if (before_id) { conditions.push('id < ?'); bindings.push(before_id) }
       if (errors_only) { conditions.push('is_error = 1') }
       const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
       const sql = `SELECT id, actor, tool, summary, is_error, created_at FROM audit_log ${where} ORDER BY created_at DESC LIMIT ?`
@@ -443,7 +454,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       const result = await this.env.AUDIT_DB.prepare(sql).bind(...bindings).all()
       if (!result.results || result.results.length === 0) return { content: [{ type: 'text', text: 'No audit log entries found.' }] }
       const rows = result.results as Array<{ id: number; actor: string; tool: string; summary: string; is_error: number; created_at: string }>
-      const text = rows.map((row) => `${row.is_error ? '[ERR]' : '[OK]'} [${row.created_at}] ${row.actor} -> ${row.tool}\n  ${row.summary}`).join('\n\n')
+      const text = rows.map((row) => `#${row.id} ${row.is_error ? '[ERR]' : '[OK]'} [${row.created_at}] ${row.actor} -> ${row.tool}\n  ${row.summary}`).join('\n\n')
       return { content: [{ type: 'text', text: `Audit log (${rows.length} entries):\n\n${text}` }] }
     }))
 
@@ -452,27 +463,30 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       inputSchema: {
         owner: z.string().optional(),
         repo: z.string().optional(),
-        per_page: z.number().min(1).max(100).default(30),
+        page: z.number().int().positive().default(1).describe('Results page, starting at 1'),
+        per_page: z.number().int().min(1).max(100).default(30),
         protected_only: z.boolean().default(false),
       },
       annotations: { title: 'List branches', readOnlyHint: true, openWorldHint: true },
-    }, withErrorHandling(async ({ owner, repo, per_page, protected_only }) => {
+    }, withErrorHandling(async ({ owner, repo, page, per_page, protected_only }) => {
       const r = await this.resolveRepo(owner, repo)
-      const { data } = await octokit.rest.repos.listBranches({ ...r, per_page, protected: protected_only || undefined })
+      const { data } = await octokit.rest.repos.listBranches({ ...r, page, per_page, protected: protected_only || undefined })
       if (data.length === 0) return { content: [{ type: 'text', text: 'No branches found.' }] }
       const text = data.map((b) => `${b.protected ? '[protected]' : '[branch]'} ${b.name.padEnd(40)} ${b.commit.sha.slice(0, 7)}`).join('\n')
       return { content: [{ type: 'text', text: `Branches in ${r.owner}/${r.repo} (${data.length}):\n\n${text}` }] }
     }))
 
     this.server.registerTool('delete_branch', {
-      description: 'Delete a branch from a repository. Protected branches are blocked.',
+      description: 'Requires confirm equal to owner/repo@branch. Delete a branch from a repository. Protected branches are blocked.',
       inputSchema: {
-        owner: z.string().optional(),
-        repo: z.string().optional(),
+        confirm: z.string().describe("Exact target to confirm deletion/merge; see tool description"),
+        owner: z.string().min(1).describe('Explicit GitHub repository owner; defaults are not used for writes'),
+        repo: z.string().min(1).describe('Explicit GitHub repository name; defaults are not used for writes'),
         branch: z.string(),
       },
       annotations: { title: 'Delete branch', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-    }, writeTool('delete_branch', ({ branch }) => `Deleted branch "${branch}"`, async ({ owner, repo, branch }) => {
+    }, writeTool('delete_branch', ({ branch }) => `Deleted branch "${branch}"`, async ({ owner, repo, branch, confirm }) => {
+      requireConfirmation(confirm, `${owner}/${repo}@${branch}`)
       const r = await this.resolveRepo(owner, repo)
       const protectedBranches = (this.env.PROTECTED_BRANCHES ?? 'main,master').split(',').map((b) => b.trim().toLowerCase())
       if (protectedBranches.includes(branch.toLowerCase())) {
@@ -498,8 +512,8 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     this.server.registerTool('create_branch', {
       description: 'Create a new branch from an existing branch.',
       inputSchema: {
-        owner: z.string().optional(),
-        repo: z.string().optional(),
+        owner: z.string().min(1).describe('Explicit GitHub repository owner; defaults are not used for writes'),
+        repo: z.string().min(1).describe('Explicit GitHub repository name; defaults are not used for writes'),
         branch: z.string(),
         from_branch: z.string().default('main'),
       },
@@ -514,8 +528,8 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     this.server.registerTool('push_files', {
       description: 'Create or update one or more files in a single commit.',
       inputSchema: {
-        owner: z.string().optional(),
-        repo: z.string().optional(),
+        owner: z.string().min(1).describe('Explicit GitHub repository owner; defaults are not used for writes'),
+        repo: z.string().min(1).describe('Explicit GitHub repository name; defaults are not used for writes'),
         branch: z.string().default('main'),
         message: z.string(),
         files: z.array(z.object({ path: z.string(), content: z.string() })).min(1),
@@ -540,8 +554,8 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     this.server.registerTool('create_pull_request', {
       description: 'Open a pull request from one branch into another.',
       inputSchema: {
-        owner: z.string().optional(),
-        repo: z.string().optional(),
+        owner: z.string().min(1).describe('Explicit GitHub repository owner; defaults are not used for writes'),
+        repo: z.string().min(1).describe('Explicit GitHub repository name; defaults are not used for writes'),
         title: z.string(),
         head: z.string(),
         base: z.string().default('main'),
@@ -557,8 +571,8 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     this.server.registerTool('create_issue', {
       description: 'Create a new issue in a repository.',
       inputSchema: {
-        owner: z.string().optional(),
-        repo: z.string().optional(),
+        owner: z.string().min(1).describe('Explicit GitHub repository owner; defaults are not used for writes'),
+        repo: z.string().min(1).describe('Explicit GitHub repository name; defaults are not used for writes'),
         title: z.string(),
         body: z.string().optional(),
         labels: z.array(z.string()).optional(),
@@ -571,16 +585,18 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     }))
 
     this.server.registerTool('delete_file', {
-      description: 'Delete a file from a repository.',
+      description: 'Requires confirm equal to owner/repo@branch:path. Delete a file from a repository.',
       inputSchema: {
-        owner: z.string().optional(),
-        repo: z.string().optional(),
+        confirm: z.string().describe("Exact target to confirm deletion/merge; see tool description"),
+        owner: z.string().min(1).describe('Explicit GitHub repository owner; defaults are not used for writes'),
+        repo: z.string().min(1).describe('Explicit GitHub repository name; defaults are not used for writes'),
         path: z.string(),
         branch: z.string().default('main'),
         message: z.string(),
       },
       annotations: { title: 'Delete file', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-    }, writeTool('delete_file', ({ path, branch }) => `Deleted "${path}" from @${branch}`, async ({ owner, repo, path, branch, message }) => {
+    }, writeTool('delete_file', ({ path, branch }) => `Deleted "${path}" from @${branch}`, async ({ owner, repo, path, branch, message, confirm }) => {
+      requireConfirmation(confirm, `${owner}/${repo}@${branch}:${path}`)
       const r = await this.resolveRepo(owner, repo)
       assertBranchWritable(this.env, branch)
       const { data: existing } = await octokit.rest.repos.getContent({ ...r, path, ref: branch })
@@ -592,26 +608,29 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     }))
 
     this.server.registerTool('merge_pull_request', {
-      description: 'Merge an open pull request.',
+      description: 'Requires confirm equal to owner/repo#pull_number. Merge an open pull request.',
       inputSchema: {
-        owner: z.string().optional(),
-        repo: z.string().optional(),
+        confirm: z.string().describe("Exact target to confirm deletion/merge; see tool description"),
+        owner: z.string().min(1).describe('Explicit GitHub repository owner; defaults are not used for writes'),
+        repo: z.string().min(1).describe('Explicit GitHub repository name; defaults are not used for writes'),
         pull_number: z.number(),
         merge_method: z.enum(['merge', 'squash', 'rebase']).default('squash'),
+        expected_head_sha: z.string().regex(/^[a-f0-9]{40}$/i).describe('Reviewed PR head SHA; merge fails if it changed'),
         commit_title: z.string().optional(),
       },
       annotations: { title: 'Merge pull request', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-    }, writeTool('merge_pull_request', ({ pull_number }) => `Merged PR #${pull_number}`, async ({ owner, repo, pull_number, merge_method, commit_title }) => {
+    }, writeTool('merge_pull_request', ({ pull_number }) => `Merged PR #${pull_number}`, async ({ owner, repo, pull_number, merge_method, commit_title, confirm, expected_head_sha }) => {
+      requireConfirmation(confirm, `${owner}/${repo}#${pull_number}`)
       const r = await this.resolveRepo(owner, repo)
-      const { data } = await octokit.rest.pulls.merge({ ...r, pull_number, merge_method, commit_title })
-      return { content: [{ type: 'text', text: data.merged ? `Merged PR #${pull_number}: ${data.sha}` : `Not merged: ${data.message}` }] }
+      const { data } = await octokit.rest.pulls.merge({ ...r, pull_number, merge_method, commit_title, sha: expected_head_sha })
+      return { content: [{ type: 'text', text: data.merged ? `Merged PR #${pull_number}: ${data.sha}` : `Not merged: ${data.message}` }], isError: !data.merged }
     }))
 
     this.server.registerTool('rename_file', {
       description: 'Rename or move a file in a single atomic commit.',
       inputSchema: {
-        owner: z.string().optional(),
-        repo: z.string().optional(),
+        owner: z.string().min(1).describe('Explicit GitHub repository owner; defaults are not used for writes'),
+        repo: z.string().min(1).describe('Explicit GitHub repository name; defaults are not used for writes'),
         old_path: z.string(),
         new_path: z.string(),
         branch: z.string().default('main'),
@@ -673,8 +692,8 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     this.server.registerTool('trigger_workflow', {
       description: 'Trigger a GitHub Actions workflow via workflow_dispatch.',
       inputSchema: {
-        owner: z.string().optional(),
-        repo: z.string().optional(),
+        owner: z.string().min(1).describe('Explicit GitHub repository owner; defaults are not used for writes'),
+        repo: z.string().min(1).describe('Explicit GitHub repository name; defaults are not used for writes'),
         workflow_id: z.string(),
         ref: z.string().default('main'),
         inputs: z.record(z.string(), z.string()).optional(),
@@ -692,12 +711,13 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
         owner: z.string().optional(),
         repo: z.string().optional(),
         workflow_id: z.string(),
-        per_page: z.number().min(1).max(20).default(5),
+        page: z.number().int().positive().default(1).describe('Results page, starting at 1'),
+        per_page: z.number().int().min(1).max(20).default(5),
       },
       annotations: { title: 'Get workflow runs', readOnlyHint: true, openWorldHint: true },
-    }, withErrorHandling(async ({ owner, repo, workflow_id, per_page }) => {
+    }, withErrorHandling(async ({ owner, repo, workflow_id, page, per_page }) => {
       const r = await this.resolveRepo(owner, repo)
-      const { data } = await octokit.rest.actions.listWorkflowRuns({ ...r, workflow_id, per_page })
+      const { data } = await octokit.rest.actions.listWorkflowRuns({ ...r, workflow_id, page, per_page })
       const text = data.workflow_runs.map((run) => `#${run.run_number}  ${run.status}${run.conclusion ? `/${run.conclusion}` : ''}  ${run.head_branch}  ${run.html_url}`).join('\n')
       return { content: [{ type: 'text', text: text || 'No workflow runs found.' }] }
     }))
@@ -709,43 +729,39 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
         repo: z.string().optional(),
         workflow_id: z.string(),
         ref: z.string().default('main'),
+        run_id: z.number().int().positive().optional().describe('Exact workflow run ID, or provide commit_sha'),
+        commit_sha: z.string().regex(/^[a-f0-9]{40}$/i).optional().describe('Commit SHA for a workflow_dispatch run; required unless run_id is given'),
         timeout_seconds: z.number().min(10).max(600).default(180),
         poll_interval_seconds: z.number().min(5).max(30).default(10),
       },
       annotations: { title: 'Wait for workflow', readOnlyHint: true, openWorldHint: true },
-    }, withErrorHandling(async ({ owner, repo, workflow_id, ref, timeout_seconds, poll_interval_seconds }) => {
+    }, withErrorHandling(async ({ owner, repo, workflow_id, ref, run_id, commit_sha, timeout_seconds, poll_interval_seconds }) => {
       const r = await this.resolveRepo(owner, repo)
-      const started = Date.now()
-      await sleep(5000)
-      while (Date.now() - started < timeout_seconds * 1000) {
-        const { data } = await octokit.rest.actions.listWorkflowRuns({ ...r, workflow_id, branch: ref, per_page: 1 })
-        const run = data.workflow_runs[0]
-        if (!run) return { content: [{ type: 'text', text: `No runs found for "${workflow_id}" on "${ref}".` }], isError: true }
-        const elapsed = Math.round((Date.now() - started) / 1000)
-        if (run.status === 'completed') {
-          const icon = run.conclusion === 'success' ? 'OK' : 'FAIL'
-          return {
-            content: [{ type: 'text', text: `[${icon}] "${workflow_id}" completed in ~${elapsed}s\n${run.status}/${run.conclusion ?? 'unknown'} - Run #${run.run_number}\n${run.html_url}` }],
-            isError: run.conclusion !== 'success',
-          }
-        }
-        await sleep(poll_interval_seconds * 1000)
-      }
-      return { content: [{ type: 'text', text: `Timed out after ${timeout_seconds}s.` }], isError: true }
+      const run = await waitForRun(async () => {
+        if (run_id) return [(await octokit.rest.actions.getWorkflowRun({ ...r, run_id })).data]
+        return (await octokit.rest.actions.listWorkflowRuns({ ...r, workflow_id, branch: ref, event: 'workflow_dispatch', head_sha: commit_sha, per_page: 100 })).data.workflow_runs
+      }, { runId: run_id, sha: commit_sha, timeoutMs: timeout_seconds * 1000, intervalMs: poll_interval_seconds * 1000 })
+      return { content: [{ type: 'text', text: JSON.stringify({ run_id: run.id, commit: run.head_sha, status: run.status, conclusion: run.conclusion, url: run.html_url }) }], isError: run.conclusion !== 'success' }
     }))
 
     this.server.registerTool('deploy_and_push', {
       description: 'Push files AND trigger a deploy workflow in one call.',
       inputSchema: {
-        owner: z.string().optional(),
-        repo: z.string().optional(),
-        branch: z.string().default('main'),
+        owner: z.string().min(1).describe('Explicit GitHub repository owner; defaults are not used for writes'),
+        repo: z.string().min(1).describe('Explicit GitHub repository name; defaults are not used for writes'),
+        branch: z.string().min(1).describe('Existing branch to commit and deploy; protected branches are blocked'),
         message: z.string(),
-        files: z.array(z.object({ path: z.string(), content: z.string() })).min(1),
-        workflow_id: z.string(),
+        files: z.array(z.object({ path: z.string().min(1).describe('Repository-relative file path'), content: z.string().describe('Complete UTF-8 file contents') })).min(1),
+        workflow_id: z.string().describe('Workflow filename (e.g. deploy.yml) or numeric ID; must support workflow_dispatch'),
+        wait: z.boolean().default(false).describe('Wait for this commit workflow and optionally smoke-test it'),
+        timeout_seconds: z.number().int().min(10).max(240).default(180),
+        smoke_test_url: z.string().url().optional().describe('Probe after successful workflow; requires wait=true'),
+        expected_text: z.string().min(1).max(4096).optional().describe('Required response substring for smoke test'),
       },
       annotations: { title: 'Push and deploy', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-    }, writeTool('deploy_and_push', ({ workflow_id }) => `Pushed and triggered "${workflow_id}"`, async ({ owner, repo, branch, message, files, workflow_id }) => {
+    }, writeTool('deploy_and_push', ({ workflow_id }) => `Pushed and triggered "${workflow_id}"`, async ({ owner, repo, branch, message, files, workflow_id, wait, timeout_seconds, smoke_test_url, expected_text }) => {
+      if (smoke_test_url && !wait) throw new Error('smoke_test_url requires wait=true')
+      if (expected_text && !smoke_test_url) throw new Error('expected_text requires smoke_test_url')
       const r = await this.resolveRepo(owner, repo)
       assertBranchWritable(this.env, branch)
       const { data: refData } = await octokit.rest.git.getRef({ ...r, ref: `heads/${branch}` })
@@ -757,7 +773,25 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       const { data: tree } = await octokit.rest.git.createTree({ ...r, base_tree: baseCommit.tree.sha, tree: blobs })
       const { data: commit } = await octokit.rest.git.createCommit({ ...r, message, tree: tree.sha, parents: [refData.object.sha] })
       await octokit.rest.git.updateRef({ ...r, ref: `heads/${branch}`, sha: commit.sha })
-      await octokit.rest.actions.createWorkflowDispatch({ ...r, workflow_id, ref: branch })
+      const dispatchedAt = Date.now()
+      try {
+        await octokit.rest.actions.createWorkflowDispatch({ ...r, workflow_id, ref: branch })
+      } catch {
+        return { content: [{ type: 'text', text: `Commit ${commit.sha} was pushed to ${r.owner}/${r.repo}@${branch}, but workflow dispatch failed or its result is unknown. Check workflow runs before retrying; the commit was not reverted.` }], isError: true }
+      }
+      if (wait) {
+        try {
+          const run = await waitForRun(async () => (await octokit.rest.actions.listWorkflowRuns({
+            ...r, workflow_id, branch, event: 'workflow_dispatch', head_sha: commit.sha, per_page: 100,
+          })).data.workflow_runs, { sha: commit.sha, after: dispatchedAt, timeoutMs: timeout_seconds * 1000, intervalMs: 5000 })
+          const smoke = run.conclusion === 'success' && smoke_test_url
+            ? await probeUrl({ url: smoke_test_url, expectedStatus: 200, expectedText: expected_text, timeoutMs: 10000, attempts: 3, delayMs: 2000 }) : undefined
+          return { content: [{ type: 'text', text: JSON.stringify({ commit: commit.sha, run_id: run.id, conclusion: run.conclusion, url: run.html_url, smoke }) }],
+            isError: run.conclusion !== 'success' || smoke?.ok === false }
+        } catch (error) {
+          return { content: [{ type: 'text', text: `Commit ${commit.sha} was pushed and workflow dispatched. ${error instanceof Error ? error.message : 'Waiting failed.'}` }], isError: true }
+        }
+      }
       return { content: [{ type: 'text', text: `Pushed ${files.length} file(s) to ${r.owner}/${r.repo}@${branch} (${commit.html_url}) and triggered "${workflow_id}".` }] }
     }))
 
@@ -769,6 +803,10 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       const { deployments } = await getWorkerDeployments(this.env, script_name)
       if (deployments.length === 0) return { content: [{ type: 'text', text: `No deployments found for "${script_name}".` }] }
       const latest = deployments[0]
+      const history = deployments.slice(0, 10).map(deployment => ({
+        deployment_id: deployment.id, created_on: deployment.created_on,
+        versions: deployment.versions?.map(version => ({ version_id: version.version_id, percentage: version.percentage })),
+      }))
       const versionLines = (latest.versions ?? []).map((v) => `  - ${v.version_id}${v.percentage != null ? ` (${v.percentage}%)` : ''}${v.tag ? ` [${v.tag}]` : ''}`).join('\n')
       const text =
         `Worker      : ${script_name}\n` +
@@ -776,7 +814,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
         `Strategy    : ${latest.strategy ?? 'unknown'}\n` +
         `By          : ${latest.author_email ?? 'unknown'}\n` +
         (versionLines ? `Versions:\n${versionLines}\n` : '') +
-        `\n(${deployments.length} deployment(s) on record)`
+        `\nRecent deployment history (up to 10; version IDs can be used for rollback):\n${JSON.stringify(history)}`
       return { content: [{ type: 'text', text }] }
     }))
 
@@ -839,52 +877,31 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
         'Delete a single object from a Cloudflare R2 bucket. ' +
         'Requires CLOUDFLARE_API_TOKEN (R2:Write) and CLOUDFLARE_ACCOUNT_ID.',
       inputSchema: {
+        confirm: z.string().describe("Exact target to confirm deletion/merge; see tool description"),
         bucket: z.string().describe('R2 bucket name'),
         key: z.string().describe('Object key / path to delete'),
       },
       annotations: { title: 'Delete R2 object', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-    }, writeTool('delete_r2_object', ({ bucket, key }) => `Deleted "${key}" from bucket "${bucket}"`, async ({ bucket, key }) => {
+    }, writeTool('delete_r2_object', ({ bucket, key }) => `Deleted "${key}" from bucket "${bucket}"`, async ({ bucket, key, confirm }) => {
+      requireConfirmation(confirm, `${bucket}:${key}`)
       await deleteR2Object(this.env, bucket, key)
       return { content: [{ type: 'text', text: `Deleted "${key}" from R2 bucket "${bucket}".` }] }
     }))
 
     this.server.registerTool('smoke_test', {
-      description:
-        'POST-deploy smoke test: sends an HTTP GET to a given URL and checks the response status. ' +
-        'Returns OK if the status matches expected_status, FAIL otherwise. ' +
-        'Useful for verifying a Worker or Pages site is live after a deploy.',
+      description: 'Probe status and optional response substring, with bounded retries and per-attempt timings.',
       inputSchema: {
-        url: z.string().url().describe('URL to probe, e.g. "https://mcpnew.muidsoft.com/"'),
-        expected_status: z.number().min(100).max(599).default(200).describe('Expected HTTP status code (default 200)'),
-        timeout_ms: z.number().min(1000).max(30000).default(10000).describe('Request timeout in milliseconds'),
+        url: z.string().url(),
+        expected_status: z.number().int().min(100).max(599).default(200),
+        expected_text: z.string().min(1).max(4096).optional().describe('Substring required within the first 1 MiB of response'),
+        timeout_ms: z.number().int().min(1000).max(30000).default(10000),
+        attempts: z.number().int().min(1).max(5).default(3),
+        delay_ms: z.number().int().min(0).max(10000).default(2000),
       },
       annotations: { title: 'Smoke test URL', readOnlyHint: true, openWorldHint: true },
-    }, withErrorHandling(async ({ url, expected_status, timeout_ms }) => {
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), timeout_ms)
-      let status: number
-      let statusText: string
-      let elapsed: number
-      try {
-        const t0 = Date.now()
-        const res = await fetch(url, { method: 'GET', signal: controller.signal, redirect: 'follow' })
-        elapsed = Date.now() - t0
-        status = res.status
-        statusText = res.statusText
-      } catch (err: any) {
-        clearTimeout(timer)
-        const msg = err?.name === 'AbortError' ? `Timed out after ${timeout_ms}ms` : String(err)
-        return { content: [{ type: 'text', text: `[FAIL] ${url}\nError: ${msg}` }], isError: true }
-      }
-      clearTimeout(timer)
-      const ok = status === expected_status
-      const icon = ok ? 'OK' : 'FAIL'
-      const text =
-        `[${icon}] ${url}\n` +
-        `Status  : ${status} ${statusText}\n` +
-        `Expected: ${expected_status}\n` +
-        `Elapsed : ${elapsed}ms`
-      return { content: [{ type: 'text', text }], isError: !ok }
+    }, withErrorHandling(async ({ url, expected_status, expected_text, timeout_ms, attempts, delay_ms }) => {
+      const result = await probeUrl({ url, expectedStatus: expected_status, expectedText: expected_text, timeoutMs: timeout_ms, attempts, delayMs: delay_ms })
+      return { content: [{ type: 'text', text: JSON.stringify(result) }], isError: !result.ok }
     }))
 
     this.server.registerTool('get_pr_preview_url', {
@@ -935,8 +952,8 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
         'Useful after a transient failure - re-triggers the same run without a new commit. ' +
         'Use get_workflow_runs to find the run_id.',
       inputSchema: {
-        owner: z.string().optional(),
-        repo: z.string().optional(),
+        owner: z.string().min(1).describe('Explicit GitHub repository owner; defaults are not used for writes'),
+        repo: z.string().min(1).describe('Explicit GitHub repository name; defaults are not used for writes'),
         run_id: z.number().describe('Workflow run ID (from get_workflow_runs)'),
         failed_jobs_only: z.boolean().default(false).describe('If true, only re-run failed jobs (not the whole run)'),
       },
@@ -1006,21 +1023,23 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     }))
 
     this.server.registerTool('kv_namespace_list', {
-      description: 'List all KV namespaces in the account with their IDs.',
-      inputSchema: {},
+      description: 'List a page of KV namespaces in the account with their IDs.',
+      inputSchema: { page: z.number().int().positive().default(1), per_page: z.number().int().min(1).max(100).default(100) },
       annotations: { title: 'List KV namespaces', readOnlyHint: true, openWorldHint: true },
-    }, withErrorHandling(async () => {
-      const namespaces = await listKVNamespaces(this.env)
+    }, withErrorHandling(async ({ page, per_page }) => {
+      const namespaces = await listKVNamespaces(this.env, page, per_page)
       if (namespaces.length === 0) return { content: [{ type: 'text', text: 'No KV namespaces found.' }] }
       const text = namespaces.map((ns) => `${ns.title.padEnd(40)} ${ns.id}`).join('\n')
       return { content: [{ type: 'text', text: `KV Namespaces (${namespaces.length}):\n${'Title'.padEnd(40)} ID\n${'-'.repeat(80)}\n${text}` }] }
     }))
 
     this.server.registerTool('kv_namespace_delete', {
-      description: 'Delete a KV namespace and all its keys. Irreversible.',
-      inputSchema: { namespace_id: z.string().describe('KV namespace ID') },
+      description: 'Requires confirm equal to namespace_id. Delete a KV namespace and all its keys. Irreversible.',
+      inputSchema: {
+        confirm: z.string().describe("Exact target to confirm deletion/merge; see tool description"), namespace_id: z.string().describe('KV namespace ID') },
       annotations: { title: 'Delete KV namespace', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-    }, writeTool('kv_namespace_delete', ({ namespace_id }) => `Deleted KV namespace ${namespace_id}`, async ({ namespace_id }) => {
+    }, writeTool('kv_namespace_delete', ({ namespace_id }) => `Deleted KV namespace ${namespace_id}`, async ({ namespace_id, confirm }) => {
+      requireConfirmation(confirm, namespace_id)
       await deleteKVNamespace(this.env, namespace_id)
       return { content: [{ type: 'text', text: `Deleted KV namespace ${namespace_id}.` }] }
     }))
@@ -1055,13 +1074,15 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     }))
 
     this.server.registerTool('kv_delete', {
-      description: 'Delete a key from a KV namespace.',
+      description: 'Requires confirm equal to namespace_id:key. Delete a key from a KV namespace.',
       inputSchema: {
+        confirm: z.string().describe("Exact target to confirm deletion/merge; see tool description"),
         namespace_id: z.string().describe('KV namespace ID'),
         key: z.string().describe('Key to delete'),
       },
       annotations: { title: 'KV delete', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-    }, writeTool('kv_delete', ({ namespace_id, key }) => `KV delete key "${key}" from ${namespace_id}`, async ({ namespace_id, key }) => {
+    }, writeTool('kv_delete', ({ namespace_id, key }) => `KV delete key "${key}" from ${namespace_id}`, async ({ namespace_id, key, confirm }) => {
+      requireConfirmation(confirm, `${namespace_id}:${key}`)
       await kvDelete(this.env, namespace_id, key)
       return { content: [{ type: 'text', text: `Deleted key "${key}" from namespace ${namespace_id}.` }] }
     }))
@@ -1104,11 +1125,11 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     }))
 
     this.server.registerTool('d1_database_list', {
-      description: 'List all D1 databases in the account with their UUIDs.',
-      inputSchema: {},
+      description: 'List a page of D1 databases in the account with their UUIDs.',
+      inputSchema: { page: z.number().int().positive().default(1), per_page: z.number().int().min(10).max(100).default(100) },
       annotations: { title: 'List D1 databases', readOnlyHint: true, openWorldHint: true },
-    }, withErrorHandling(async () => {
-      const dbs = await listD1Databases(this.env)
+    }, withErrorHandling(async ({ page, per_page }) => {
+      const dbs = await listD1Databases(this.env, page, per_page)
       if (dbs.length === 0) return { content: [{ type: 'text', text: 'No D1 databases found.' }] }
       const text = dbs.map((db) => {
         const size = db.file_size ? ` (${(db.file_size / 1024).toFixed(1)} KB)` : ''
@@ -1119,10 +1140,12 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     }))
 
     this.server.registerTool('d1_database_delete', {
-      description: 'Delete a D1 database permanently. All data is lost.',
-      inputSchema: { database_id: z.string().describe('D1 database UUID') },
+      description: 'Requires confirm equal to database_id. Delete a D1 database permanently. All data is lost.',
+      inputSchema: {
+        confirm: z.string().describe("Exact target to confirm deletion/merge; see tool description"), database_id: z.string().describe('D1 database UUID') },
       annotations: { title: 'Delete D1 database', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-    }, writeTool('d1_database_delete', ({ database_id }) => `Deleted D1 database ${database_id}`, async ({ database_id }) => {
+    }, writeTool('d1_database_delete', ({ database_id }) => `Deleted D1 database ${database_id}`, async ({ database_id, confirm }) => {
+      requireConfirmation(confirm, database_id)
       await deleteD1Database(this.env, database_id)
       return { content: [{ type: 'text', text: `Deleted D1 database ${database_id}.` }] }
     }))
@@ -1135,7 +1158,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
         params: z.array(z.any()).optional().describe('Positional parameters for ? placeholders'),
       },
       annotations: { title: 'D1 query', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-    }, writeTool('d1_query', ({ database_id, sql }) => `D1 query on ${database_id}: ${sql.slice(0, 80)}`, async ({ database_id, sql, params }) => {
+    }, writeTool('d1_query', ({ database_id }) => `D1 query on ${database_id} (SQL and parameter values omitted)`, async ({ database_id, sql, params }) => {
       const results = await d1Query(this.env, database_id, sql, params ?? [])
       const parts: string[] = []
       for (const result of results) {
@@ -1195,25 +1218,53 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     // -----------------------------------------------------------------------
 
     this.server.registerTool('worker_list', {
-      description: 'List all Cloudflare Workers deployed in the account.',
-      inputSchema: {},
+      description: 'List Worker names and timestamps without internal handlers. Pass script_name for binding names/types, custom domains, cron schedules and latest deployment; unavailable metadata is reported explicitly.',
+      inputSchema: { script_name: z.string().min(1).optional().describe('Fetch detailed metadata for this Worker only; binding values are never returned') },
       annotations: { title: 'List Workers', readOnlyHint: true, openWorldHint: true },
-    }, withErrorHandling(async () => {
+    }, withErrorHandling(async ({ script_name }) => {
+      if (script_name) {
+        const details = await workerDetails(this.env, script_name)
+        return { content: [{ type: 'text', text: JSON.stringify(details) }], isError: details.unavailable.length === 4 }
+      }
       const workers = await listWorkers(this.env)
       if (workers.length === 0) return { content: [{ type: 'text', text: 'No Workers found.' }] }
       const text = workers.map((w) => {
         const modified = w.modified_on ? `  modified: ${w.modified_on.slice(0, 10)}` : ''
-        const handlers = w.handlers?.length ? `  [${w.handlers.join(', ')}]` : ''
+        const handlers = w.created_on ? `  created: ${w.created_on.slice(0, 10)}` : ''
         return `${w.id}${handlers}${modified}`
       }).join('\n')
       return { content: [{ type: 'text', text: `Workers (${workers.length}):\n\n${text}` }] }
     }))
 
+    this.server.registerTool('cloudflare_token_verify', {
+      description: 'Check configured token validity and expiry. Does not enumerate permission policies or expose token values.',
+      inputSchema: { token_kind: z.enum(['user', 'account']).default('user').describe('Choose the type of configured token') },
+      annotations: { title: 'Verify Cloudflare token', readOnlyHint: true, openWorldHint: true },
+    }, withErrorHandling(async ({ token_kind }) => {
+      const result = await verifyCloudflareToken(this.env, token_kind)
+      return { content: [{ type: 'text', text: JSON.stringify(result) }], isError: result.status !== 'active' }
+    }))
+
+    this.server.registerTool('worker_rollback', {
+      description: 'Deploy an existing Worker version to 100% traffic. Does not undo database migrations, KV writes, or external state. Obtain version IDs using get_worker_deployment_status. Requires confirm=script_name:version_id.',
+      inputSchema: {
+        script_name: z.string().min(1), version_id: z.string().uuid(),
+        confirm: z.string().describe('Exact script_name:version_id to confirm the production version change'),
+      },
+      annotations: { title: 'Rollback Worker version', readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+    }, writeTool('worker_rollback', ({ script_name, version_id }) => `Rollback ${script_name} to ${version_id}`, async ({ script_name, version_id, confirm }) => {
+      requireConfirmation(confirm, `${script_name}:${version_id}`)
+      const result = await rollbackWorker(this.env, script_name, version_id)
+      return { content: [{ type: 'text', text: JSON.stringify({ deployment_id: result.id, versions: result.versions }) }] }
+    }))
+
     this.server.registerTool('worker_delete', {
-      description: 'Delete a Cloudflare Worker script. Permanently removes the Worker and all its deployments.',
-      inputSchema: { script_name: z.string().describe('Worker script name / ID') },
+      description: 'Requires confirm equal to script_name. Delete a Cloudflare Worker script. Permanently removes the Worker and all its deployments.',
+      inputSchema: {
+        confirm: z.string().describe("Exact target to confirm deletion/merge; see tool description"), script_name: z.string().describe('Worker script name / ID') },
       annotations: { title: 'Delete Worker', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-    }, writeTool('worker_delete', ({ script_name }) => `Deleted Worker "${script_name}"`, async ({ script_name }) => {
+    }, writeTool('worker_delete', ({ script_name }) => `Deleted Worker "${script_name}"`, async ({ script_name, confirm }) => {
+      requireConfirmation(confirm, script_name)
       await deleteWorker(this.env, script_name)
       return { content: [{ type: 'text', text: `Deleted Worker "${script_name}".` }] }
     }))
@@ -1227,8 +1278,13 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       },
       annotations: { title: 'Worker secret put', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     }, writeTool('worker_secret_put', ({ script_name, secret_name }) => `Set secret "${secret_name}" on Worker "${script_name}"`, async ({ script_name, secret_name, secret_value }) => {
-      const result = await workerSecretPut(this.env, script_name, secret_name, secret_value)
-      return { content: [{ type: 'text', text: `Set secret "${result.name}" on Worker "${script_name}".` }] }
+      try {
+        await workerSecretPut(this.env, script_name, secret_name, secret_value)
+        return { content: [{ type: 'text', text: `Set secret "${secret_name}" on Worker "${script_name}".` }] }
+      } catch {
+        // Never echo upstream messages: an API or intermediary could reflect the secret.
+        return { content: [{ type: 'text', text: 'Could not set Worker secret. Check token permissions, Worker name and Cloudflare availability. Secret value omitted.' }], isError: true }
+      }
     }))
 
     this.server.registerTool('worker_secret_list', {
@@ -1243,13 +1299,15 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     }))
 
     this.server.registerTool('worker_secret_delete', {
-      description: 'Delete a secret from a Worker.',
+      description: 'Requires confirm equal to script_name:secret_name. Delete a secret from a Worker.',
       inputSchema: {
+        confirm: z.string().describe("Exact target to confirm deletion/merge; see tool description"),
         script_name: z.string().describe('Worker script name'),
         secret_name: z.string().describe('Secret name to delete'),
       },
       annotations: { title: 'Worker secret delete', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-    }, writeTool('worker_secret_delete', ({ script_name, secret_name }) => `Deleted secret "${secret_name}" from Worker "${script_name}"`, async ({ script_name, secret_name }) => {
+    }, writeTool('worker_secret_delete', ({ script_name, secret_name }) => `Deleted secret "${secret_name}" from Worker "${script_name}"`, async ({ script_name, secret_name, confirm }) => {
+      requireConfirmation(confirm, `${script_name}:${secret_name}`)
       await workerSecretDelete(this.env, script_name, secret_name)
       return { content: [{ type: 'text', text: `Deleted secret "${secret_name}" from Worker "${script_name}".` }] }
     }))
@@ -1285,24 +1343,26 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
 
     this.server.registerTool('r2_bucket_list', {
       description: 'List all R2 buckets in the account.',
-      inputSchema: {},
+      inputSchema: { start_after: z.string().optional().describe('Last bucket name from the previous page'), per_page: z.number().int().min(1).max(100).default(100) },
       annotations: { title: 'List R2 buckets', readOnlyHint: true, openWorldHint: true },
-    }, withErrorHandling(async () => {
-      const buckets = await listR2Buckets(this.env)
+    }, withErrorHandling(async ({ start_after, per_page }) => {
+      const buckets = await listR2Buckets(this.env, start_after, per_page)
       if (buckets.length === 0) return { content: [{ type: 'text', text: 'No R2 buckets found.' }] }
       const text = buckets.map((b) => {
         const loc = b.location ? `  [${b.location}]` : ''
         const created = b.creation_date ? `  created: ${b.creation_date.slice(0, 10)}` : ''
         return `${b.name}${loc}${created}`
       }).join('\n')
-      return { content: [{ type: 'text', text: `R2 Buckets (${buckets.length}):\n\n${text}` }] }
+      return { content: [{ type: 'text', text: `R2 Buckets (${buckets.length}):\n\n${text}\nNext start_after: ${buckets.length === per_page ? buckets[buckets.length - 1].name : 'none'}` }] }
     }))
 
     this.server.registerTool('r2_bucket_delete', {
-      description: 'Delete an R2 bucket. The bucket must be empty first.',
-      inputSchema: { name: z.string().describe('Bucket name') },
+      description: 'Requires confirm equal to name. Delete an R2 bucket. The bucket must be empty first.',
+      inputSchema: {
+        confirm: z.string().describe("Exact target to confirm deletion/merge; see tool description"), name: z.string().describe('Bucket name') },
       annotations: { title: 'Delete R2 bucket', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-    }, writeTool('r2_bucket_delete', ({ name }) => `Deleted R2 bucket "${name}"`, async ({ name }) => {
+    }, writeTool('r2_bucket_delete', ({ name }) => `Deleted R2 bucket "${name}"`, async ({ name, confirm }) => {
+      requireConfirmation(confirm, name)
       await deleteR2Bucket(this.env, name)
       return { content: [{ type: 'text', text: `Deleted R2 bucket "${name}".` }] }
     }))
@@ -1313,17 +1373,17 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
 
     this.server.registerTool('pages_project_list', {
       description: 'List all Cloudflare Pages projects in the account.',
-      inputSchema: {},
+      inputSchema: { page: z.number().int().positive().default(1), per_page: z.number().int().min(1).max(100).default(10) },
       annotations: { title: 'List Pages projects', readOnlyHint: true, openWorldHint: true },
-    }, withErrorHandling(async () => {
-      const projects = await listPagesProjects(this.env)
+    }, withErrorHandling(async ({ page, per_page }) => {
+      const projects = await listPagesProjects(this.env, page, per_page)
       if (projects.length === 0) return { content: [{ type: 'text', text: 'No Pages projects found.' }] }
       const text = projects.map((p) => {
         const url = p.subdomain ? `  â https://${p.subdomain}` : ''
         const status = p.latest_deployment?.latest_stage?.status ?? ''
         return `${p.name}${url}${status ? `  [${status}]` : ''}`
       }).join('\n')
-      return { content: [{ type: 'text', text: `Pages Projects (${projects.length}):\n\n${text}` }] }
+      return { content: [{ type: 'text', text: `Pages Projects (page ${page}, ${projects.length} results; request page ${page + 1} for more):\n\n${text}` }] }
     }))
 
     this.server.registerTool('pages_project_get', {
@@ -1354,11 +1414,12 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       description: 'List recent deployments for a Pages project.',
       inputSchema: {
         project_name: z.string().describe('Pages project name'),
-        limit: z.number().min(1).max(25).default(10),
+        page: z.number().int().positive().default(1),
+        limit: z.number().int().min(1).max(25).default(10),
       },
       annotations: { title: 'List Pages deployments', readOnlyHint: true, openWorldHint: true },
-    }, withErrorHandling(async ({ project_name, limit }) => {
-      const deployments = await listPagesDeployments(this.env, project_name, limit)
+    }, withErrorHandling(async ({ project_name, limit, page }) => {
+      const deployments = await listPagesDeployments(this.env, project_name, limit, page)
       if (deployments.length === 0) return { content: [{ type: 'text', text: `No deployments found for "${project_name}".` }] }
       const text = deployments.map((d) => {
         const status = d.latest_stage?.status ?? 'unknown'
@@ -1368,7 +1429,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
         const url = d.url ? `  ${d.url}` : ''
         return `[${status}] ${d.created_on.slice(0, 10)} ${branch}@${commit} ${msg}${url}`
       }).join('\n')
-      return { content: [{ type: 'text', text: `Deployments for "${project_name}" (${deployments.length}):\n\n${text}` }] }
+      return { content: [{ type: 'text', text: `Deployments for "${project_name}" (page ${page}, ${deployments.length} results; request page ${page + 1} for more):\n\n${text}` }] }
     }))
 
     this.server.registerTool('pages_deployment_trigger', {
@@ -1395,11 +1456,11 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     // -----------------------------------------------------------------------
 
     this.server.registerTool('zone_list', {
-      description: 'List all domains/zones in the Cloudflare account.',
-      inputSchema: {},
+      description: 'List a page of domains/zones in the Cloudflare account.',
+      inputSchema: { page: z.number().int().positive().default(1), per_page: z.number().int().min(5).max(50).default(50) },
       annotations: { title: 'List zones', readOnlyHint: true, openWorldHint: true },
-    }, withErrorHandling(async () => {
-      const zones = await listZones(this.env)
+    }, withErrorHandling(async ({ page, per_page }) => {
+      const zones = await listZones(this.env, page, per_page)
       if (zones.length === 0) return { content: [{ type: 'text', text: 'No zones found.' }] }
       const text = zones.map((z) =>
         `${z.name.padEnd(40)} ${z.id}  [${z.status}]${z.plan?.name ? `  ${z.plan.name}` : ''}`
@@ -1410,13 +1471,14 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     this.server.registerTool('dns_record_list', {
       description: 'List DNS records for a zone. Use zone_list to get the zone_id.',
       inputSchema: {
+        page: z.number().int().positive().default(1), per_page: z.number().int().min(1).max(100).default(100),
         zone_id: z.string().describe('Zone ID (from zone_list)'),
         type: z.string().optional().describe('Filter by record type: A, AAAA, CNAME, TXT, MX, etc.'),
         name: z.string().optional().describe('Filter by record name'),
       },
       annotations: { title: 'List DNS records', readOnlyHint: true, openWorldHint: true },
-    }, withErrorHandling(async ({ zone_id, type, name }) => {
-      const records = await listDnsRecords(this.env, zone_id, { type, name })
+    }, withErrorHandling(async ({ zone_id, type, name, page, per_page }) => {
+      const records = await listDnsRecords(this.env, zone_id, { type, name, page, perPage: per_page })
       if (records.length === 0) return { content: [{ type: 'text', text: 'No DNS records found.' }] }
       const text = records.map((r) => {
         const proxied = r.proxied ? ' [proxied]' : ''
@@ -1462,13 +1524,15 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     }))
 
     this.server.registerTool('dns_record_delete', {
-      description: 'Delete a DNS record from a zone.',
+      description: 'Requires confirm equal to zone_id:record_id. Delete a DNS record from a zone.',
       inputSchema: {
+        confirm: z.string().describe("Exact target to confirm deletion/merge; see tool description"),
         zone_id: z.string().describe('Zone ID'),
         record_id: z.string().describe('DNS record ID (from dns_record_list)'),
       },
       annotations: { title: 'Delete DNS record', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-    }, writeTool('dns_record_delete', ({ record_id }) => `Deleted DNS record ${record_id}`, async ({ zone_id, record_id }) => {
+    }, writeTool('dns_record_delete', ({ record_id }) => `Deleted DNS record ${record_id}`, async ({ zone_id, record_id, confirm }) => {
+      requireConfirmation(confirm, `${zone_id}:${record_id}`)
       await deleteDnsRecord(this.env, zone_id, record_id)
       return { content: [{ type: 'text', text: `Deleted DNS record ${record_id} from zone ${zone_id}.` }] }
     }))
@@ -1577,8 +1641,4 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       }
     })
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }
