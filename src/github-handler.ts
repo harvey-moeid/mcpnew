@@ -11,7 +11,9 @@ app.use('*', async (c, next) => {
   await next()
   c.header('Cache-Control', 'no-store')
   c.header('X-Content-Type-Options', 'nosniff')
-  c.header('Referrer-Policy', 'no-referrer')
+  // Form POSTs need their same-origin Origin header for the approval CSRF check.
+  // no-referrer can serialize that header as "null" for navigation requests.
+  c.header('Referrer-Policy', 'same-origin')
   c.header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https://avatars.githubusercontent.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'")
 })
 

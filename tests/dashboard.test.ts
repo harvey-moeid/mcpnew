@@ -177,6 +177,7 @@ test('MCP approval preserves the connector flow with browser-bound callback stat
   const { env } = environment()
   githubMock(t)
   const consent = await request(env, '/authorize?client_id=mcp-client')
+  assert.equal(consent.headers.get('Referrer-Policy'), 'same-origin')
   const token = (await consent.text()).match(/name="state" value="([a-f0-9]{64})"/)![1]
   const approve = await request(env, '/authorize', { method: 'POST', headers: { Cookie: cookieHeader(consent.headers.get('set-cookie')!), Origin: origin }, body: new URLSearchParams({ action: 'approve', state: token }) })
   assert.equal(approve.status, 302)
@@ -187,6 +188,29 @@ test('MCP approval preserves the connector flow with browser-bound callback stat
   assert.equal(complete.status, 302)
   assert.equal(new URL(complete.headers.get('location')!).hostname, 'client.example')
   assert.ok(!complete.headers.getSetCookie().some(value => value.startsWith('__Host-ops_session=')))
+})
+
+test('MCP approval rejects foreign, null and missing origins without consuming state', async () => {
+  const { env } = environment()
+  const consent = await request(env, '/authorize?client_id=mcp-client')
+  const token = (await consent.text()).match(/name="state" value="([a-f0-9]{64})"/)![1]
+  const cookie = cookieHeader(consent.headers.get('set-cookie')!)
+  for (const invalidOrigin of ['https://other.example', 'null', undefined]) {
+    const headers: Record<string, string> = { Cookie: cookie }
+    if (invalidOrigin !== undefined) headers.Origin = invalidOrigin
+    const response = await request(env, '/authorize', {
+      method: 'POST', headers,
+      body: new URLSearchParams({ action: 'approve', state: token }),
+    })
+    assert.equal(response.status, 403)
+    assert.equal(await response.text(), 'Invalid approval origin')
+  }
+  const response = await request(env, '/authorize', {
+    method: 'POST', headers: { Cookie: cookie, Origin: origin },
+    body: new URLSearchParams({ action: 'approve', state: token }),
+  })
+  assert.equal(response.status, 302)
+  assert.equal(new URL(response.headers.get('location')!).hostname, 'github.com')
 })
 
 test('private audit queries bind the signed-in actor and validate pagination', async () => {
