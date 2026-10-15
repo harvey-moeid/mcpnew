@@ -37,7 +37,7 @@ async function cfFetch<T>(env: Env, path: string, options?: RequestInit): Promis
     signal: options?.signal ?? AbortSignal.timeout(15000),
     headers: {
       Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
-      'Content-Type': 'application/json',
+      ...(options?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
       ...(options?.headers ?? {}),
     },
   })
@@ -74,7 +74,7 @@ async function cfFetchZone<T>(env: Env, path: string, options?: RequestInit): Pr
     ...options,
     headers: {
       Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
-      'Content-Type': 'application/json',
+      ...(options?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
       ...(options?.headers ?? {}),
     },
   })
@@ -334,8 +334,8 @@ export async function createKVNamespace(env: Env, title: string): Promise<KVName
   })
 }
 
-export async function listKVNamespaces(env: Env): Promise<KVNamespaceInfo[]> {
-  return cfFetch<KVNamespaceInfo[]>(env, '/storage/kv/namespaces?per_page=100')
+export async function listKVNamespaces(env: Env, page = 1, perPage = 100): Promise<KVNamespaceInfo[]> {
+  return cfFetch<KVNamespaceInfo[]>(env, `/storage/kv/namespaces?page=${page}&per_page=${perPage}`)
 }
 
 export async function deleteKVNamespace(env: Env, namespaceId: string): Promise<void> {
@@ -463,8 +463,8 @@ export async function createD1Database(env: Env, name: string, location?: string
   return cfFetch<D1DatabaseInfo>(env, '/d1/database', { method: 'POST', body: JSON.stringify(body) })
 }
 
-export async function listD1Databases(env: Env): Promise<D1DatabaseInfo[]> {
-  const result = await cfFetch<any>(env, '/d1/database?per_page=100')
+export async function listD1Databases(env: Env, page = 1, perPage = 100): Promise<D1DatabaseInfo[]> {
+  const result = await cfFetch<any>(env, `/d1/database?page=${page}&per_page=${perPage}`)
   return Array.isArray(result) ? result : result?.databases ?? []
 }
 
@@ -548,6 +548,26 @@ export async function listWorkers(env: Env): Promise<WorkerScriptInfo[]> {
   return Array.isArray(result) ? result : result?.workers ?? result?.scripts ?? []
 }
 
+export async function workerDetails(env: Env, scriptName: string) {
+  const script = encodeURIComponent(scriptName)
+  const results = await Promise.allSettled([
+    cfFetch<{ bindings?: Array<{ name: string; type: string }> }>(env, `/workers/scripts/${script}/settings`),
+    cfFetch<{ schedules?: Array<{ cron: string }> }>(env, `/workers/scripts/${script}/schedules`),
+    getWorkerDeployments(env, script),
+    cfFetch<Array<{ hostname: string }>>(env, `/workers/domains?service=${script}`),
+  ])
+  const [settings, schedules, deployments, domains] = results
+  return {
+    script_name: scriptName,
+    // Whitelist metadata: settings can contain plaintext environment variables.
+    bindings: settings.status === 'fulfilled' ? settings.value.bindings?.map(b => ({ name: b.name, type: b.type })) ?? [] : undefined,
+    crons: schedules.status === 'fulfilled' ? schedules.value.schedules?.map(s => s.cron) ?? [] : undefined,
+    latest_deployment: deployments.status === 'fulfilled' ? deployments.value.deployments[0] : undefined,
+    domains: domains.status === 'fulfilled' && Array.isArray(domains.value) ? domains.value.map(d => d.hostname) : undefined,
+    unavailable: results.flatMap((r, i) => r.status === 'rejected' ? [['bindings', 'crons', 'deployments', 'domains'][i]] : []),
+  }
+}
+
 export async function deleteWorker(env: Env, scriptName: string): Promise<void> {
   await cfFetch<null>(env, `/workers/scripts/${scriptName}`, { method: 'DELETE' })
 }
@@ -605,8 +625,8 @@ export async function createR2Bucket(
   return cfFetch<R2BucketInfo>(env, '/r2/buckets', { method: 'POST', body: JSON.stringify(body) })
 }
 
-export async function listR2Buckets(env: Env): Promise<R2BucketInfo[]> {
-  const result = await cfFetch<any>(env, '/r2/buckets')
+export async function listR2Buckets(env: Env, startAfter?: string, perPage = 100): Promise<R2BucketInfo[]> {
+  const result = await cfFetch<any>(env, `/r2/buckets?order=name&direction=asc&per_page=${perPage}${startAfter ? '&start_after=' + encodeURIComponent(startAfter) : ''}`)
   return Array.isArray(result) ? result : result?.buckets ?? []
 }
 
@@ -636,8 +656,8 @@ export type PagesProjectInfo = {
   }
 }
 
-export async function listPagesProjects(env: Env): Promise<PagesProjectInfo[]> {
-  return cfFetch<PagesProjectInfo[]>(env, '/pages/projects?per_page=50')
+export async function listPagesProjects(env: Env, page = 1, perPage = 10): Promise<PagesProjectInfo[]> {
+  return cfFetch<PagesProjectInfo[]>(env, `/pages/projects?page=${page}&per_page=${perPage}`)
 }
 
 export async function getPagesProject(env: Env, projectName: string): Promise<PagesProjectInfo> {
@@ -662,10 +682,11 @@ export async function listPagesDeployments(
   env: Env,
   projectName: string,
   limit = 10,
+  page = 1,
 ): Promise<PagesDeploymentInfo[]> {
   return cfFetch<PagesDeploymentInfo[]>(
     env,
-    `/pages/projects/${projectName}/deployments?per_page=${limit}`,
+    `/pages/projects/${projectName}/deployments?page=${page}&per_page=${limit}`,
   )
 }
 
@@ -674,9 +695,11 @@ export async function triggerPagesDeployment(
   projectName: string,
   branch?: string,
 ): Promise<PagesDeploymentInfo> {
+  const form = new FormData()
+  if (branch) form.set('branch', branch)
   return cfFetch<PagesDeploymentInfo>(env, `/pages/projects/${projectName}/deployments`, {
     method: 'POST',
-    body: JSON.stringify(branch ? { branch } : {}),
+    body: form,
   })
 }
 
@@ -694,11 +717,11 @@ export type ZoneInfo = {
   plan?: { name?: string }
 }
 
-export async function listZones(env: Env): Promise<ZoneInfo[]> {
+export async function listZones(env: Env, page = 1, perPage = 50): Promise<ZoneInfo[]> {
   if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID) {
     throw new Error('Cloudflare API not configured.')
   }
-  return cfFetchZone<ZoneInfo[]>(env, `/zones?account.id=${env.CLOUDFLARE_ACCOUNT_ID}&per_page=50`)
+  return cfFetchZone<ZoneInfo[]>(env, `/zones?account.id=${env.CLOUDFLARE_ACCOUNT_ID}&page=${page}&per_page=${perPage}`)
 }
 
 export type DnsRecord = {
@@ -718,9 +741,9 @@ export type DnsRecord = {
 export async function listDnsRecords(
   env: Env,
   zoneId: string,
-  opts: { type?: string; name?: string } = {},
+  opts: { type?: string; name?: string; page?: number; perPage?: number } = {},
 ): Promise<DnsRecord[]> {
-  const params = new URLSearchParams({ per_page: '100' })
+  const params = new URLSearchParams({ page: String(opts.page ?? 1), per_page: String(opts.perPage ?? 100) })
   if (opts.type) params.set('type', opts.type)
   if (opts.name) params.set('name', opts.name)
   return cfFetchZone<DnsRecord[]>(env, `/zones/${zoneId}/dns_records?${params}`)
@@ -876,4 +899,27 @@ export async function getPagesAnalytics(
     date: r.dimensions?.date ?? '',
     pageviews: r.sum?.pageviews ?? 0,
   }))
+}
+
+
+/** Explicit version rollback: does not revert KV/D1 data or other external state. */
+export async function rollbackWorker(env: Env, scriptName: string, versionId: string) {
+  return cfFetch<WorkerDeployment>(env, `/workers/scripts/${encodeURIComponent(scriptName)}/deployments`, {
+    method: 'POST',
+    body: JSON.stringify({ strategy: 'percentage', versions: [{ version_id: versionId, percentage: 100 }],
+      annotations: { 'workers/message': 'Explicit rollback requested through MCP' } }),
+  })
+}
+
+export async function verifyCloudflareToken(env: Env, kind: 'user' | 'account') {
+  if (!env.CLOUDFLARE_API_TOKEN) throw new Error('Cloudflare token is not configured.')
+  if (kind === 'account' && !env.CLOUDFLARE_ACCOUNT_ID) throw new Error('Cloudflare account ID is not configured.')
+  const path = kind === 'account' ? `/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/tokens/verify` : '/user/tokens/verify'
+  const response = await fetch(`${CF_API_BASE}${path}`, {
+    headers: { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` }, signal: AbortSignal.timeout(15000),
+  })
+  const data = await response.json<CloudflareResponse<{ status: string; expires_on?: string; not_before?: string }>>()
+  if (!response.ok || !data.success) throw new CloudflareApiError('Token verification failed. Check token type, expiry and account scope.', response.status)
+  return { status: data.result.status, expires_on: data.result.expires_on, not_before: data.result.not_before,
+    permissions: 'Verification does not enumerate granted permissions. Access is checked by each resource API.' }
 }
