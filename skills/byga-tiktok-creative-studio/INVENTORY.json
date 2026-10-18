@@ -1,0 +1,131 @@
+{
+  "skill": "byga-tiktok-creative-studio",
+  "version": "1.0.0",
+  "files": [
+    {
+      "file": "README.md",
+      "bytes": 3576,
+      "sha256": "deba797a0ccb4aa5b5191c879e7ea7fcce02eb27dc61569dfa8f3992a0f41034"
+    },
+    {
+      "file": "SKILL.md",
+      "bytes": 9872,
+      "sha256": "e05e7a8b0f9129d1d242f130fbede01ff0a8d908e9fb4cfc3020e598024b86a4"
+    },
+    {
+      "file": "assets/brand-guide.md",
+      "bytes": 755,
+      "sha256": "417f5e5e19498e965ff71039b34afb4422d6dfe4cb1f1689ff21e696f83abb7f"
+    },
+    {
+      "file": "assets/carousel-template.md",
+      "bytes": 581,
+      "sha256": "ff6aa5fc93e1a53d147fcef0f41f1b783c45721d422a9af8ba4336ffa386f107"
+    },
+    {
+      "file": "assets/character-bible.md",
+      "bytes": 582,
+      "sha256": "fc21517e983f2543e344374c52863361a323025b894bcd6d49e5b3b9a3fa058b"
+    },
+    {
+      "file": "assets/continuity-ledger.csv",
+      "bytes": 301,
+      "sha256": "ab0cc451a237760f86ea4580862f0e5de5ecf6e2a5e0b29763f3b47249f9a8c6"
+    },
+    {
+      "file": "assets/creative-brief.md",
+      "bytes": 802,
+      "sha256": "74576e6d1dc3261d1e7d15b80fe3594b585acb17a59e6f5cbfdbe12cab528689"
+    },
+    {
+      "file": "assets/ugc-shot-list.md",
+      "bytes": 812,
+      "sha256": "02eb709286979baed5ceea042b2726e4de9ec345b87bb5c2557253603aa3f61f"
+    },
+    {
+      "file": "assets/video-storyboard-template.md",
+      "bytes": 823,
+      "sha256": "76e733f50987200a2e7f3a54b7028c95be775f08296fe49aa268d9baad1e169c"
+    },
+    {
+      "file": "examples/carousel-sample.json",
+      "bytes": 3102,
+      "sha256": "1f7c61d5b65b5b4b5439c2449399787aa881cb184963d4300e278698d8921608"
+    },
+    {
+      "file": "examples/video-sample.json",
+      "bytes": 1666,
+      "sha256": "064ee9bc9bd7004266d5e9807e30f88f7f68542baa76326a28ff0fac0560efc4"
+    },
+    {
+      "file": "references/carousel.md",
+      "bytes": 2703,
+      "sha256": "74bc29702877b49cf7f6da0ec6a5723b42b17876a7f3bce0bff443ae58ac73f2"
+    },
+    {
+      "file": "references/consistency-system.md",
+      "bytes": 2180,
+      "sha256": "44931733e7c056a7c7cdba92c2f333b142c14a90f31081f88755e7451b9bcbec"
+    },
+    {
+      "file": "references/drama-series.md",
+      "bytes": 2716,
+      "sha256": "87bea18bb791bdf7533829bc6681d944077424acbdfe952e7c0ccf522d1ad079"
+    },
+    {
+      "file": "references/model-adapters.md",
+      "bytes": 2069,
+      "sha256": "95a92a9fb23d961483351bdfd319efe795054b9bb9564d688b3c4f3532ccca33"
+    },
+    {
+      "file": "references/original-master-instructions.md",
+      "bytes": 8011,
+      "sha256": "96ff25488b69ef8d272a0f4688856df8088a119686f09febc24f24bf07a9843e"
+    },
+    {
+      "file": "references/production-playbook.md",
+      "bytes": 9057,
+      "sha256": "3c42c9b3b5298696917218c372a3689ef573c99fce9df53da1cbc845584d1db5"
+    },
+    {
+      "file": "references/quality-safety.md",
+      "bytes": 2601,
+      "sha256": "a52df10e4c127ede55c7c7dd6399df65bc8df62717e0ed4435b80f4876e81204"
+    },
+    {
+      "file": "references/text-to-image.md",
+      "bytes": 2783,
+      "sha256": "dbedaec41593deadc1804b4da18969f1ce778604d6d4f2a0c8121c9f804ff088"
+    },
+    {
+      "file": "references/text-to-video.md",
+      "bytes": 3213,
+      "sha256": "bab4e6972f10d9991411b55272db73be43d369e1bb8446cb826b97d36dc9b12e"
+    },
+    {
+      "file": "references/trends-and-viral.md",
+      "bytes": 2146,
+      "sha256": "a4a4642752473802d60763fdebd32782b9fda7079741b6070f792e11cf06ce7c"
+    },
+    {
+      "file": "references/ugc-affiliate.md",
+      "bytes": 2679,
+      "sha256": "61de711b899c31ba629b630061bb0c4c5ba1e7e9926cf60b3fc211ca9167db4f"
+    },
+    {
+      "file": "scripts/content_qc.py",
+      "bytes": 5166,
+      "sha256": "d13c6ec2a4c093cec421b48c2fb55757b47870baf7b0e9b9d3ceda236fa5a2fd"
+    },
+    {
+      "file": "scripts/validate_skill.py",
+      "bytes": 2102,
+      "sha256": "a812f1e8ff0cb17b842c30315b96989a4d08b83047c924cebc4d6603f1de02a0"
+    },
+    {
+      "file": "tests/test_content_qc.py",
+      "bytes": 2040,
+      "sha256": "c2bc888933f7ea3c6caa1139de13ff2f2d34d41c301d431d9f2537048f2f9b1d"
+    }
+  ]
+}

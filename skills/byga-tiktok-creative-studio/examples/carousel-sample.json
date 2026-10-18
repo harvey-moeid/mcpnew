@@ -1,0 +1,56 @@
+{
+  "project": "Demo carousel edukasi (contoh fiktif, bukan konten final)",
+  "aspect_ratio": "9:16",
+  "slide_count": 8,
+  "brand": "Contoh edukasi",
+  "slides": [
+    {
+      "number": 1,
+      "heading": "Kenapa ide konten sering habis?",
+      "body": "Bukan karena kamu kurang kreatif.",
+      "image_prompt": "Portrait 9:16 editorial still life visual illustrating creative block, warm sunlight, clear center space for separate Indonesian text overlay, clean modern photographic style, no incidental letters, no watermark."
+    },
+    {
+      "number": 2,
+      "heading": "Mulai dari penonton",
+      "body": "Siapa yang paling terbantu kontenmu?",
+      "image_prompt": "Portrait 9:16 editorial still life visual illustrating audience planning, warm sunlight, clear center space for separate Indonesian text overlay, clean modern photographic style, no incidental letters, no watermark."
+    },
+    {
+      "number": 3,
+      "heading": "Cari satu masalah",
+      "body": "Fokus pada satu pertanyaan.",
+      "image_prompt": "Portrait 9:16 editorial still life visual illustrating single question, warm sunlight, clear center space for separate Indonesian text overlay, clean modern photographic style, no incidental letters, no watermark."
+    },
+    {
+      "number": 4,
+      "heading": "Buat hook spesifik",
+      "body": "Janjikan satu hal yang bisa dijelaskan.",
+      "image_prompt": "Portrait 9:16 editorial still life visual illustrating specific headline, warm sunlight, clear center space for separate Indonesian text overlay, clean modern photographic style, no incidental letters, no watermark."
+    },
+    {
+      "number": 5,
+      "heading": "Tunjukkan contoh",
+      "body": "Peragakan, jangan hanya menyebutkan.",
+      "image_prompt": "Portrait 9:16 editorial still life visual illustrating demonstration, warm sunlight, clear center space for separate Indonesian text overlay, clean modern photographic style, no incidental letters, no watermark."
+    },
+    {
+      "number": 6,
+      "heading": "Berikan langkah praktis",
+      "body": "Buat agar mudah dicoba hari ini.",
+      "image_prompt": "Portrait 9:16 editorial still life visual illustrating action steps, warm sunlight, clear center space for separate Indonesian text overlay, clean modern photographic style, no incidental letters, no watermark."
+    },
+    {
+      "number": 7,
+      "heading": "Ringkas pesan utama",
+      "body": "Satu ide jelas lebih kuat daripada banyak ide kabur.",
+      "image_prompt": "Portrait 9:16 editorial still life visual illustrating focus insight, warm sunlight, clear center space for separate Indonesian text overlay, clean modern photographic style, no incidental letters, no watermark."
+    },
+    {
+      "number": 8,
+      "heading": "Simpan untuk ide berikutnya",
+      "body": "Ikuti akun ini jika tips serupa bermanfaat.",
+      "image_prompt": "Portrait 9:16 editorial still life visual illustrating save follow, warm sunlight, clear center space for separate Indonesian text overlay, clean modern photographic style, no incidental letters, no watermark."
+    }
+  ]
+}

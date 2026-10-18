@@ -1,0 +1,2 @@
+project,episode,shot_id,start_sec,end_sec,characters,wardrobe,location,props,starting_pose,ending_pose,eyeline,lighting,text_or_dialogue,canon_note
+example,EP01,SH01,0,4,protagonist,black_jacket,coffee_shop,phone,standing_left,turning_right,camera_left,warm_window_light,Hello...,Establishes location
