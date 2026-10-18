@@ -1,0 +1,43 @@
+{
+  "project": "Demo video storytelling edukasi",
+  "aspect_ratio": "9:16",
+  "duration_seconds": 30,
+  "character_lock": "Adult presenter, short black hair, cream shirt, friendly calm speaking manner.",
+  "shots": [
+    {
+      "id": "SH01",
+      "start_sec": 0,
+      "end_sec": 3,
+      "visual_prompt": "Portrait vertical medium closeup, presenter in cream shirt holds blank notebook, energetic eye contact, soft daylight, subtle handheld phone camera.",
+      "dialogue": "Sering bingung cari ide?"
+    },
+    {
+      "id": "SH02",
+      "start_sec": 3,
+      "end_sec": 9,
+      "visual_prompt": "Same presenter, same wardrobe, over shoulder notebook with empty page, slow push in, home desk and daylight unchanged.",
+      "dialogue": "Mulai dari masalah yang sering ditanya."
+    },
+    {
+      "id": "SH03",
+      "start_sec": 9,
+      "end_sec": 17,
+      "visual_prompt": "Same presenter, same notebook, writes three short symbolic bullet lines (no readable text), natural hand motion, side closeup, stable soft light.",
+      "dialogue": "Tuliskan tiga masalah penontonmu."
+    },
+    {
+      "id": "SH04",
+      "start_sec": 17,
+      "end_sec": 25,
+      "visual_prompt": "Same presenter now highlights first drawn bullet using a blue sticky marker, gentle overhead tilt, desk continuity preserved.",
+      "dialogue": "Pilih satu, lalu buat jawabannya jadi video."
+    },
+    {
+      "id": "SH05",
+      "start_sec": 25,
+      "end_sec": 30,
+      "visual_prompt": "Return to presenter medium closeup at same desk and wardrobe, slight friendly smile, gentle camera push, notebook visible.",
+      "dialogue": "Simpan idenya untuk nanti."
+    }
+  ]
+}

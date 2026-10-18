@@ -343,3 +343,8 @@ Compatibility changes: refresh/reconnect MCP tool discovery after updating the s
 GitHub lists support `page`; notes use `cursor`; KV/D1/zone/DNS lists support `page`; R2 bucket lists use `start_after`. Workers script listing has no page parameter in the current Cloudflare API spec.
 
 Validation uses mocked API responses and the registered tool handlers. A real-account reproduction is still needed to confirm the original Pages 400; support for `page`/`per_page` is documented by Cloudflare, so pagination alone does not prove its cause.
+
+
+## BYGA Agent Skills
+
+`mcpnew` supports the bundled `byga-coding-engineering` and `byga-tiktok-creative-studio` skill packages plus user-scoped GitHub imports. Available MCP tools: `list_skills`, `get_skill_instructions`, `read_skill_file`, `install_skill_from_github`, `set_skill_enabled`, and `uninstall_skill` (with confirmation). You can also invoke the `use-skill` MCP prompt where supported by the client. See [docs/SKILLS.md](docs/SKILLS.md) for setup, examples and security limitations.
