@@ -347,4 +347,4 @@ Validation uses mocked API responses and the registered tool handlers. A real-ac
 
 ## BYGA Agent Skills
 
-`mcpnew` supports the bundled `byga-coding-engineering` and `byga-tiktok-creative-studio` skill packages plus user-scoped GitHub imports. Available MCP tools: `list_skills`, `get_skill_instructions`, `read_skill_file`, `install_skill_from_github`, `set_skill_enabled`, and `uninstall_skill` (with confirmation). You can also invoke the `use-skill` MCP prompt where supported by the client. See [docs/SKILLS.md](docs/SKILLS.md) for setup, examples and security limitations.
+`mcpnew` supports the bundled `byga-cloudflare-fullstack`, `byga-coding-engineering`, and `byga-tiktok-creative-studio` skill packages plus user-scoped GitHub imports. Available MCP tools: `list_skills`, `get_skill_instructions`, `read_skill_file`, `install_skill_from_github`, `set_skill_enabled`, and `uninstall_skill` (with confirmation). You can also invoke the `use-skill` MCP prompt where supported by the client. See [docs/SKILLS.md](docs/SKILLS.md) for setup, examples and security limitations.

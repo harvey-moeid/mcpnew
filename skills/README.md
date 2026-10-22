@@ -1,8 +1,9 @@
 # BYGA MCP Skills
 
-These are portable skills with `SKILL.md` as the entry point. Each folder is imported from the corresponding user-provided ZIP without removing references, assets, scripts, or examples.
+These are portable skills with `SKILL.md` as the entry point. Packages are imported from user-provided ZIP files or Markdown instructions without removing references, assets, scripts, or examples.
 
 Supported built-in skill IDs:
+- `byga-cloudflare-fullstack`
 - `byga-coding-engineering`
 - `byga-tiktok-creative-studio`
 

@@ -1,7 +1,8 @@
 # BYGA Skills in GitHub Ops MCP
 
-The `mcpnew` Worker supports two built-in Agent Skills imported in full from the owner's original ZIP packages:
+The `mcpnew` Worker supports three built-in Agent Skills imported from the owner's ZIP packages and Markdown instructions:
 
+- `byga-cloudflare-fullstack`: end-to-end PRD, Cloudflare architecture, implementation, GitHub CI/CD, deployment, debugging and production verification. Supports `PRD`, `ARCHITECT`, `BUILD`, `CI`, `DEPLOY`, `AUDIT`, `FIX` and `FULL` modes; defaults to `FULL`.
 - `byga-coding-engineering`: coding, GitHub Actions / PR review, Cloudflare deployments, security and performance.
 - `byga-tiktok-creative-studio`: carousel, AI image/video prompts, UGC affiliate, drama and content QA.
 
@@ -12,6 +13,8 @@ Original packages are preserved in `skills/<name>/`. The `SKILL.md` file is the 
 Once this PR is merged, the Worker is deployed, and the MCP connector is reconnected or its tools refreshed, try:
 
 - `List the available skills using list_skills.`
+- `Use byga-cloudflare-fullstack in PRD mode to define my application requirements.`
+- `Use byga-cloudflare-fullstack in FULL mode to build my Cloudflare application.`
 - `Use byga-coding-engineering to audit CI in my repo; load references/workflows.md if needed.`
 - `Use byga-tiktok-creative-studio to create an eight-slide @jalurtarot carousel in Mystic Purple; load references/carousel.md.`
 - `Run the use-skill prompt for byga-coding-engineering, then audit repo byga_office.`
