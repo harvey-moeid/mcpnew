@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
+import installation from '../installation.json' with { type: 'json' }
 import { BUILTIN_SKILLS, parseSkillHeader, assertSafePath, getSkills, getSkill,
   readSkillFile, installSkillFromGitHub, setSkillEnabled, uninstallSkill } from '../src/skill-registry.ts'
 
@@ -37,9 +38,9 @@ test('Cloudflare fullstack skill loads its packaged instructions through the reg
   const github = { rest: { repos: { async getContent({ owner, repo, path, ref }: {
     owner: string; repo: string; path: string; ref: string
   }) {
-    assert.equal(owner, 'harvey-moeid')
-    assert.equal(repo, 'mcpnew')
-    assert.equal(ref, 'main')
+    assert.equal(owner, installation.githubOwner)
+    assert.equal(repo, installation.githubRepo)
+    assert.equal(ref, installation.githubRef)
     const content = await readFile(new URL(`../${path}`, import.meta.url))
     return { data: { type: 'file', encoding: 'base64', size: content.length,
       content: content.toString('base64') } }

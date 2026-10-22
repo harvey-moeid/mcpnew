@@ -1,0 +1,44 @@
+# GANTI_INSTALASI: template untuk Worker BARU. Jangan arahkan ke resource lama.
+# Isi juga installation.json; nama Worker dan origin harus konsisten.
+name = "ganti-nama-worker" # GANTI_INSTALASI: sama dengan installation.workerName
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[[durable_objects.bindings]]
+name = "MCP_OBJECT" # TETAP: nama binding yang dipakai kode
+class_name = "MyMCP" # TETAP: nama class yang diekspor
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MyMCP"]
+
+[[kv_namespaces]]
+binding = "OAUTH_KV" # TETAP
+id = "GANTI_KV_NAMESPACE_ID" # GANTI_INSTALASI: hasil wrangler kv namespace create
+
+[[d1_databases]]
+binding = "AUDIT_DB" # TETAP
+database_name = "ganti-nama-database" # GANTI_INSTALASI: nama D1 baru
+database_id = "GANTI_D1_DATABASE_ID" # GANTI_INSTALASI: UUID hasil wrangler d1 create
+migrations_dir = "migrations"
+
+[vars]
+GITHUB_ALLOWED_USERS = "GANTI_USERNAME_GITHUB" # GANTI_INSTALASI: akun pribadi yang boleh masuk
+PROTECTED_BRANCHES = "main,master"
+ALLOW_DIRECT_PUSH_TO_PROTECTED = "false"
+
+[observability]
+enabled = true
+
+# OPSIONAL: aktifkan hanya setelah domain berada di akun Cloudflare tujuan.
+# GANTI_INSTALASI: perbarui installation.publicOrigin dan callback OAuth bila ganti domain.
+# [[routes]]
+# pattern = "GANTI_DOMAIN.example"
+# custom_domain = true
+
+# SECRET: isi lewat wrangler secret put atau dashboard, bukan di file ini.
+# GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, COOKIE_ENCRYPTION_KEY
+# CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (opsional untuk tool Cloudflare)
+# BRAVE_API_KEY (opsional untuk web_search)

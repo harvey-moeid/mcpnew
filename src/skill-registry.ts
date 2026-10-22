@@ -4,6 +4,9 @@
  * Built-ins live in this repository; user imports point to an authenticated GitHub repository.
  */
 import type { Octokit } from 'octokit'
+import installation from '../installation.json' with { type: 'json' }
+
+const skillSource = { owner: installation.githubOwner, repo: installation.githubRepo, ref: installation.githubRef }
 
 export type SkillEntry = {
   name: string
@@ -19,19 +22,19 @@ export const BUILTIN_SKILLS: SkillEntry[] = [
     name: 'byga-cloudflare-fullstack',
     description: 'End-to-end software engineering skill untuk menyusun PRD, merancang arsitektur Cloudflare, mengimplementasikan aplikasi, menyiapkan GitHub CI/CD, deployment, debugging, dan verifikasi produksi.',
     version: '1.0.0', builtIn: true, enabled: true,
-    source: { owner: 'harvey-moeid', repo: 'mcpnew', path: 'skills/byga-cloudflare-fullstack', ref: 'main' },
+    source: { ...skillSource, path: 'skills/byga-cloudflare-fullstack' },
   },
   {
     name: 'byga-tiktok-creative-studio',
     description: 'TikTok carousel, prompts for images and videos, UGC affiliate, creative trends and episodic drama.',
     version: '1.0.0', builtIn: true, enabled: true,
-    source: { owner: 'harvey-moeid', repo: 'mcpnew', path: 'skills/byga-tiktok-creative-studio', ref: 'main' },
+    source: { ...skillSource, path: 'skills/byga-tiktok-creative-studio' },
   },
   {
     name: 'byga-coding-engineering',
     description: 'Code audits, implementation, debugging, GitHub Actions and PRs, Cloudflare operations and security.',
     version: '1.0.0', builtIn: true, enabled: true,
-    source: { owner: 'harvey-moeid', repo: 'mcpnew', path: 'skills/byga-coding-engineering', ref: 'main' },
+    source: { ...skillSource, path: 'skills/byga-coding-engineering' },
   },
 ]
 

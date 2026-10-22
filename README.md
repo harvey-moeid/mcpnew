@@ -1,5 +1,7 @@
 # GitHub Ops MCP Server
 
+Untuk instalasi baru/pindah akun, mulai dari [BACA-DULU.md](BACA-DULU.md). Konfigurasi akun dipusatkan di `installation.json`; template ditandai `GANTI_INSTALASI`.
+
 Remote MCP server (Cloudflare Worker) yang memberi Claude akses untuk membuat repo,
 push commit, buka pull request, membaca file, mengelola R2, dan memicu deploy —
 lewat akun GitHub kamu sendiri via OAuth, bukan lewat Personal Access Token yang

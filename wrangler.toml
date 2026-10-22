@@ -1,4 +1,5 @@
-name = "github-mcp-server"
+# GANTI_INSTALASI: untuk akun baru gunakan wrangler.example.toml dan panduan docs/PINDAH-AKUN-DAN-DEPLOY.md.
+name = "github-mcp-server" # GANTI_INSTALASI: harus sama dengan installation.json workerName
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
 compatibility_flags = ["nodejs_compat"]
@@ -15,19 +16,19 @@ new_sqlite_classes = ["MyMCP"]
 # KV namespace required by @cloudflare/workers-oauth-provider (must be named OAUTH_KV).
 [[kv_namespaces]]
 binding = "OAUTH_KV"
-id = "e585b71dbef14a049c3c785d7ff1b368"
+id = "e585b71dbef14a049c3c785d7ff1b368" # GANTI_INSTALASI: namespace baru
 
 # D1 database for the audit log (every write/destructive tool call is recorded here).
 [[d1_databases]]
 binding = "AUDIT_DB"
-database_name = "github-mcp-audit-log"
-database_id = "d5d8057f-6be6-4d8d-bfc6-56006dd39ffc"
+database_name = "github-mcp-audit-log" # GANTI_INSTALASI: nama D1 baru
+database_id = "d5d8057f-6be6-4d8d-bfc6-56006dd39ffc" # GANTI_INSTALASI: UUID D1 baru
 migrations_dir = "migrations"
 
 [vars]
 # Comma-separated GitHub usernames allowed to use this server.
 # Hanya harvey-moeid yang diizinkan masuk.
-GITHUB_ALLOWED_USERS = "harvey-moeid"
+GITHUB_ALLOWED_USERS = "harvey-moeid" # GANTI_INSTALASI: username akun tujuan
 
 # Comma-separated branches that push_files/delete_file cannot write to directly.
 # Forces the create_branch -> push_files -> create_pull_request -> merge_pull_request flow.
@@ -40,7 +41,7 @@ ALLOW_DIRECT_PUSH_TO_PROTECTED = "false"
 enabled = true
 
 [[routes]]
-pattern = "mcpnew.muidsoft.com"
+pattern = "mcpnew.muidsoft.com" # GANTI_INSTALASI: cocokkan installation.json publicOrigin
 custom_domain = true
 
 # Secrets (set via `wrangler secret put`, never committed):
