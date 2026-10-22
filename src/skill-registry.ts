@@ -16,6 +16,12 @@ export type SkillEntry = {
 
 export const BUILTIN_SKILLS: SkillEntry[] = [
   {
+    name: 'byga-cloudflare-fullstack',
+    description: 'End-to-end software engineering skill untuk menyusun PRD, merancang arsitektur Cloudflare, mengimplementasikan aplikasi, menyiapkan GitHub CI/CD, deployment, debugging, dan verifikasi produksi.',
+    version: '1.0.0', builtIn: true, enabled: true,
+    source: { owner: 'harvey-moeid', repo: 'mcpnew', path: 'skills/byga-cloudflare-fullstack', ref: 'main' },
+  },
+  {
     name: 'byga-tiktok-creative-studio',
     description: 'TikTok carousel, prompts for images and videos, UGC affiliate, creative trends and episodic drama.',
     version: '1.0.0', builtIn: true, enabled: true,

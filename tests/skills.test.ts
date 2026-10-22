@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import { BUILTIN_SKILLS, parseSkillHeader, assertSafePath, getSkills, getSkill,
   readSkillFile, installSkillFromGitHub, setSkillEnabled, uninstallSkill } from '../src/skill-registry.ts'
 
@@ -20,12 +21,37 @@ const mockGitHub = {
   } } },
 }
 
-test('both BYGA built-in skills are discoverable', async () => {
+test('all BYGA built-in skills are discoverable', async () => {
   const kv = mockKV()
   const entries = await getSkills(kv as any, 'actor')
-  assert.equal(entries.length, 2)
+  assert.equal(entries.length, 3)
   assert.deepEqual(entries.map(x => x.name), BUILTIN_SKILLS.map(x => x.name).sort())
   assert.equal((await getSkill(kv as any, 'actor', 'byga-coding-engineering')).enabled, true)
+})
+
+test('Cloudflare fullstack skill loads its packaged instructions through the registry', async () => {
+  const kv = mockKV()
+  const skill = await getSkill(kv as any, 'actor', 'byga-cloudflare-fullstack')
+  assert.equal(skill.builtIn, true)
+  assert.equal(skill.enabled, true)
+  const github = { rest: { repos: { async getContent({ owner, repo, path, ref }: {
+    owner: string; repo: string; path: string; ref: string
+  }) {
+    assert.equal(owner, 'harvey-moeid')
+    assert.equal(repo, 'mcpnew')
+    assert.equal(ref, 'main')
+    const content = await readFile(new URL(`../${path}`, import.meta.url))
+    return { data: { type: 'file', encoding: 'base64', size: content.length,
+      content: content.toString('base64') } }
+  } } } }
+  const instructions = await readSkillFile(github as any, skill)
+  const header = parseSkillHeader(instructions)
+  assert.equal(header.name, skill.name)
+  assert.equal(header.description, skill.description)
+  assert.match(instructions, /Mode default: FULL\./)
+  await setSkillEnabled(kv as any, 'actor', skill.name, false)
+  assert.equal((await getSkill(kv as any, 'actor', skill.name)).enabled, false)
+  assert.equal((await getSkill(kv as any, 'another-user', skill.name)).enabled, true)
 })
 
 test('manifest validation and traversal prevention', () => {
@@ -43,7 +69,7 @@ test('install, load, disable, enable, and remove custom skill per account', asyn
     { owner: 'owner', repo: 'repo', path: 'skills/custom-byga-skill', ref: 'main' })
   assert.equal(installed.name, 'custom-byga-skill')
   assert.equal((await getSkill(kv as any, 'actor', installed.name)).enabled, true)
-  assert.equal((await getSkills(kv as any, 'another-user')).length, 2)
+  assert.equal((await getSkills(kv as any, 'another-user')).length, BUILTIN_SKILLS.length)
   assert.match(await readSkillFile(mockGitHub as any, installed, 'SKILL.md'), /custom-byga-skill/)
   assert.equal((await setSkillEnabled(kv as any, 'actor', installed.name, false)).enabled, false)
   await assert.rejects(() => readSkillFile(mockGitHub as any, { ...installed, enabled: false }), /disabled/)
