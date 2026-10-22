@@ -1,8 +1,8 @@
 {
-  "_instructions": "GANTI_INSTALASI: ganti semua placeholder sebelum deploy; jangan isi token atau password di file ini.",
-  "publicOrigin": "https://GANTI_DOMAIN.example",
-  "githubOwner": "GANTI_USERNAME_GITHUB",
-  "githubRepo": "GANTI_NAMA_REPO",
+  "_instructions": "GANTI_INSTALASI: ubah lima nilai di bawah saat pindah akun; lihat docs/PINDAH-AKUN-DAN-DEPLOY.md.",
+  "publicOrigin": "https://mcpnew.muidsoft.com",
+  "githubOwner": "harvey-moeid",
+  "githubRepo": "mcpnew",
   "githubRef": "main",
-  "workerName": "ganti-nama-worker"
+  "workerName": "github-mcp-server"
 }
