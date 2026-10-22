@@ -32,3 +32,7 @@ Sebelum deploy akun baru, isi template dan ulangi `check:installation`, tes, Typ
 - Audit masih best-effort; tidak ada jaminan pencatatan transaksi wajib.
 - Pembatasan request/alert operasional bergantung pada konfigurasi Cloudflare; paket tidak membuat WAF/rate-limit atau alert secara otomatis.
 - Pengujian dengan mock tidak menggantikan pengujian OAuth, izin, dan perubahan resource pada akun sebenarnya.
+
+## Alur paket portabel terbaru
+
+Deploy source memakai GitHub Actions, dengan `workflow_dispatch` untuk tombol Run workflow pada branch main. Secrets deploy memakai Repository secrets. KV, D1/SQL audit, API token, dan secrets runtime diatur melalui dashboard Cloudflare. Panduan utama tidak membutuhkan CLI Cloudflare lokal. Konfigurasi placeholder tetap harus diisi sebelum deploy; paket belum di-deploy ke akun tujuan.

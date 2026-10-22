@@ -19,9 +19,9 @@ OAuth resource URL, tautan dashboard, pilihan repo awal, sumber seluruh built-in
 | Bagian | Nilai yang diganti | Sumber nilai |
 | --- | --- | --- |
 | `name` | Nama Worker baru | Samakan dengan `installation.workerName` |
-| `kv_namespaces.id` | ID namespace KV BARU | Output `wrangler kv namespace create OAUTH_KV` |
-| `d1_databases.database_name` | Nama D1 baru | Nama yang dipilih saat `wrangler d1 create` |
-| `d1_databases.database_id` | UUID database BARU | Output perintah pembuatan D1 |
+| `kv_namespaces.id` | ID namespace KV BARU | Namespace ID dari dashboard Workers KV |
+| `d1_databases.database_name` | Nama D1 baru | Nama yang dibuat melalui dashboard D1 |
+| `d1_databases.database_id` | UUID database BARU | Database ID dari dashboard D1 |
 | `vars.GITHUB_ALLOWED_USERS` | Username akun yang boleh login | Username GitHub akun pribadi tujuan |
 | `routes.pattern` | Opsional: hostname custom domain | DNS/domain di akun Cloudflare tujuan |
 
@@ -41,16 +41,16 @@ Pertahankan binding `MCP_OBJECT`, `OAUTH_KV`, `AUDIT_DB`, class `MyMCP`, dan kon
 | Worker | `CLOUDFLARE_API_TOKEN` | Opsional untuk tool Cloudflare; batasi akun/izin sesuai kebutuhan |
 | Worker | `CLOUDFLARE_ACCOUNT_ID` | Opsional, pasangan token tool Cloudflare |
 | Worker | `BRAVE_API_KEY` | Opsional untuk `web_search` |
-| GitHub environment `production` | `CLOUDFLARE_API_TOKEN` | Token deployment CI di akun tujuan |
-| GitHub environment `production` | `CLOUDFLARE_ACCOUNT_ID` | ID akun Cloudflare tempat CI deploy |
+| GitHub Repository secrets (Actions) | `CLOUDFLARE_API_TOKEN` | Token deployment CI di akun tujuan |
+| GitHub Repository secrets (Actions) | `CLOUDFLARE_ACCOUNT_ID` | ID akun Cloudflare tempat CI deploy |
 
 Secrets dengan nama sama pada Worker dan GitHub Actions adalah pengaturan TERPISAH. Token CI tidak otomatis tersedia bagi tool MCP. Token Worker juga tidak otomatis tersedia bagi GitHub Actions.
 
 ## 4. Konfigurasi di luar source code
 
 - GitHub OAuth App: Homepage URL = `publicOrigin`, callback = `publicOrigin` + `/callback`.
-- GitHub repo: environment `production`, Actions aktif, branch utama `main`.
+- GitHub repo: Repository secrets untuk Actions, Actions aktif, branch utama `main`.
 - MCP connector: endpoint `publicOrigin` + `/mcp`; hubungkan dan login ulang.
 - Custom domain opsional: domain harus berada di akun Cloudflare yang tepat; ubah `publicOrigin` dan callback bersamaan.
 
-Jalankan `npm run check:installation` setelah mengedit. Pemeriksaan ini memeriksa format dan konsistensi lokal; tidak membuktikan resource, domain, OAuth App, atau secret sudah benar-benar tersedia.
+Workflow CI/Deploy menjalankan `npm run check:installation` otomatis setelah konfigurasi di-commit ke GitHub. Pemeriksaan ini memeriksa format dan konsistensi lokal; tidak membuktikan resource, domain, OAuth App, atau secret sudah benar-benar tersedia.

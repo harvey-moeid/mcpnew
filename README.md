@@ -1,4 +1,6 @@
-# MCP pribadi — paket portabel
+# MCP pribadi — GitHub Actions + dashboard Cloudflare
+
+**Untuk repo BARU; jangan merge branch ekspor ke instance lama.**
 
 Mulai dari [BACA-DULU.md](BACA-DULU.md).
 

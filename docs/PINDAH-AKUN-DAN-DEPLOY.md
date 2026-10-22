@@ -1,181 +1,187 @@
-# Pindah akun dan deploy MCP pribadi
+# Deploy MCP pribadi: GitHub Actions + dashboard Cloudflare
 
-Panduan ini membuat instance baru dengan data dan login terpisah. Markdown ini dapat dibaca langsung di GitHub atau dicetak melalui browser menjadi PDF. Pilihan utama: deploy melalui GitHub Actions; jangan sekaligus mengaktifkan auto-deploy Cloudflare Builds untuk target Worker yang sama.
+Deploy source aplikasi dilakukan oleh **GitHub Actions**. Pembuatan resource, API token, secrets, dan pemeriksaan Cloudflare dilakukan melalui **dashboard web Cloudflare**. Tidak perlu memasang Node.js, npm, atau Wrangler di komputer untuk mengikuti panduan ini; workflow menjalankan alat tersebut otomatis.
 
-## 1. Persiapan
+Paket ini untuk **repository dan instance baru**. Branch `export/private-mcp-portable` hanya sumber unduhan ZIP. Jangan membuka PR dari branch itu ke `main` instance lama.
 
-- Gunakan Node.js 22 atau lebih baru, npm, Git, Python 3 bila ingin membuat ZIP ulang.
-- Login ke akun GitHub tujuan di browser dan akun Cloudflare tujuan pada terminal yang digunakan.
-- Buat repository GitHub kosong, sebaiknya private untuk pemakaian pribadi. Jangan tambahkan README otomatis bila akan melakukan push pertama dari folder ZIP.
-- Ekstrak ZIP, lalu buka terminal di folder yang berisi `package.json`.
+## 1. Buat repo GitHub baru
 
-```sh
-npm ci
-npx wrangler login
-npx wrangler whoami
+Login ke akun GitHub tujuan → **New repository** → pilih nama dan visibilitas. Boleh centang **Add a README file** agar branch utama langsung tersedia. Gunakan branch utama **`main`**. Catat username pemilik dan nama repo; upload source setelah konfigurasi/secrets di langkah berikut siap.
+
+## 2. Catat akun Cloudflare dan alamat Worker
+
+1. Buka [dashboard Cloudflare](https://dash.cloudflare.com), lalu pilih akun tujuan.
+2. Catat **Account ID** dari halaman akun/Workers & Pages.
+3. Buka **Workers & Pages**, lihat **Your subdomain** untuk alamat workers.dev akun. Jika belum tersedia, atur subdomain melalui dashboard.
+4. Pilih nama Worker baru, misalnya `mcp-pribadi`.
+5. Alamat instance menjadi `https://NAMA_WORKER.SUBDOMAIN_AKUN.workers.dev`. Gunakan nama Worker dan subdomain akun yang sebenarnya.
+
+Tidak perlu mengimpor repo ke Cloudflare Builds. GitHub Actions akan membuat Worker sesuai `wrangler.toml` saat deploy pertama. Gunakan workers.dev untuk setup awal.
+
+## 3. Buat namespace KV melalui dashboard
+
+1. Buka **Workers KV** pada akun tujuan.
+2. Pilih **Create instance** atau tombol pembuatan namespace.
+3. Isi nama baru, misalnya `mcp-pribadi-oauth`, lalu buat.
+4. Salin **Namespace ID**.
+
+Nama resource bebas; nama binding kode tetap **`OAUTH_KV`**. GitHub Actions memasang binding dari `wrangler.toml` saat deploy.
+
+## 4. Buat D1 dan tabel audit melalui dashboard
+
+1. Buka **D1 SQL database → Create database**.
+2. Isi nama baru, misalnya `mcp-pribadi-audit`; catat nama dan **Database ID**.
+3. Buka database → **Console**.
+4. Salin **seluruh isi** file `migrations/0001_create_audit_log.sql` dari ZIP ke Console, lalu pilih **Execute**. Bila Console meminta satu statement per eksekusi, jalankan setiap statement berurutan.
+5. Pastikan tab Tables menampilkan `audit_log`. Query baca untuk pemeriksaan:
+
+```sql
+SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'audit_log';
 ```
 
-Pastikan output `whoami` menunjukkan akun tujuan. Pilih akun yang benar jika memiliki beberapa akun. Jangan menggunakan konfigurasi/token terminal milik instance lama secara tidak sengaja.
+Binding kode tetap **`AUDIT_DB`**. Gunakan KV dan D1 baru agar sesi/data instance lama terpisah. Workflow tidak menerapkan migrasi D1 otomatis. Eksekusi SQL melalui Console juga tidak mencatat riwayat migrasi Wrangler; jangan menganggap riwayat CLI sudah terisi.
 
-## 2. Pilih alamat dan buat Worker baru
+## 5. Buat token deploy di dashboard Cloudflare
 
-Di Cloudflare Dashboard, pilih akun tujuan, buka Workers & Pages, dan buat Worker kosong dengan nama baru, misalnya `mcp-pribadi`. Jangan hubungkan repository untuk auto-build di langkah ini. Catat alamat `https://<nama-worker>.<subdomain-akun>.workers.dev` yang diberikan dashboard; gunakan alamat sebenarnya, bukan contoh ini.
+1. Buka **Account API tokens → Create Token**.
+2. Pilih template **Edit Cloudflare Workers**.
+3. Batasi cakupan ke akun tujuan dan pastikan token dapat men-deploy Worker serta mengakses binding yang dipakai.
+4. Buat token dan simpan dengan aman; nilainya biasanya hanya ditampilkan sekali.
 
-Worker kosong hanya untuk memperoleh alamat dan tempat menyimpan secret. Source MCP menggantinya saat deployment. Jangan arahkan ke Worker produksi lama.
+Untuk workers.dev, jangan menambahkan zone/domain yang tidak dipakai. Sesuaikan izin jika nanti menggunakan custom domain. Jangan menempel token ke source code.
 
-Pada checkout repository lama, salin template terlebih dahulu:
+## 6. Isi secrets deployment di GitHub
 
-```sh
-cp installation.example.json installation.json
-cp wrangler.example.toml wrangler.toml
-```
+Repo baru → **Settings → Secrets and variables → Actions → Repository secrets → New repository secret**.
 
-Pada ZIP portabel kedua file utama sudah berupa template. Isi `installation.json` dan `wrangler.toml` mengikuti [tabel konfigurasi](KONFIGURASI-YANG-DIGANTI.md). Untuk tahap awal, gunakan workers.dev; custom domain dapat ditambahkan setelah alur login berfungsi.
+| Nama | Nilai |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | Token deploy dari langkah 5 |
+| `CLOUDFLARE_ACCOUNT_ID` | Account ID Cloudflare tujuan |
 
-## 3. Buat KV dan D1 baru
+Workflow portabel ini menggunakan **Repository secrets**. Tidak perlu membuat environment `production`; ini berbeda dari pengaturan instance lama. Aktifkan GitHub Actions pada repo jika belum aktif.
 
-Setelah nama Worker di `wrangler.toml` diisi, jalankan:
+## 7. Isi konfigurasi yang ditandai
 
-```sh
-npx wrangler kv namespace create OAUTH_KV
-npx wrangler d1 create mcp-pribadi-audit
-```
+Ekstrak ZIP dan edit file dengan editor teks. Anda juga bisa mengedit melalui GitHub web/GitHub.dev sebelum membuat commit source.
 
-`mcp-pribadi-audit` adalah contoh nama; pilih nama baru dan catat hasilnya. Wrangler mungkin menawarkan pembaruan konfigurasi. Jika sudah memperbarui otomatis, edit entri yang ada, jangan membuat binding duplikat.
+**`installation.json`**:
 
-- Masukkan ID namespace ke entri `binding="OAUTH_KV"`.
-- Masukkan nama dan UUID D1 ke entri `binding="AUDIT_DB"`.
-- Isi `GITHUB_ALLOWED_USERS` dengan username GitHub yang akan login, bukan alamat email.
-- Samakan `name` Worker dengan `workerName` pada `installation.json`.
-- Biarkan binding/class/migrasi Durable Object sesuai template.
+| Kolom | Nilai |
+| --- | --- |
+| `publicOrigin` | Alamat HTTPS dari langkah 2, tanpa `/` di akhir |
+| `githubOwner` | Username/organisasi pemilik repo baru |
+| `githubRepo` | Nama repo baru |
+| `githubRef` | `main` |
+| `workerName` | Nama Worker baru |
 
-## 4. Buat GitHub OAuth App baru
+**`wrangler.toml`**:
 
-Di GitHub akun tujuan: Settings → Developer settings → OAuth Apps → New OAuth App.
+| Kolom | Nilai |
+| --- | --- |
+| `name` | Sama dengan `workerName` |
+| `kv_namespaces.id` | Namespace ID dari dashboard KV |
+| `d1_databases.database_name` | Nama D1 baru |
+| `d1_databases.database_id` | Database ID dari dashboard D1 |
+| `vars.GITHUB_ALLOWED_USERS` | Username GitHub akun pribadi yang boleh login |
+
+Cari penanda **`GANTI_INSTALASI`**. Ganti semua placeholder `GANTI_...` dan `ganti-...` pada konfigurasi aktif. Penanda pada komentar, template `.example`, dan dokumen boleh tetap ada.
+
+Pertahankan `MCP_OBJECT`, `MyMCP`, `OAUTH_KV`, `AUDIT_DB`, blok migrasi Durable Object, dan `ALLOW_DIRECT_PUSH_TO_PROTECTED="false"`. Resource dibuat melalui dashboard; binding akan terpasang otomatis dari file konfigurasi saat Action men-deploy.
+
+## 8. Upload source ke repo baru
+
+1. Repo GitHub → **Add file → Upload files**.
+2. Upload **isi folder** yang memuat `package.json`, bukan ZIP atau folder pembungkusnya. `package.json`, `installation.json`, dan `wrangler.toml` harus berada di root repo.
+3. Pastikan `.github/workflows/` ikut terunggah. Tampilkan hidden files bila perlu, atau buka editor web **GitHub.dev** dengan menekan titik (`.`) pada halaman repo dan buat/upload file workflow sesuai path-nya.
+4. Sertakan `src/`, `skills/`, `scripts/`, `migrations/`, `tests/`, dan `package-lock.json`. Jangan upload token, `.env`, `.dev.vars`, atau isi database.
+5. Simpan commit ke **`main`**.
+
+Upload ke `main` menjalankan CI dan Deploy. Placeholder yang belum diisi akan ditolak oleh pemeriksaan konfigurasi sebelum unggah Worker.
+
+## 9. Deploy melalui GitHub Actions
+
+1. Buka **Actions → Deploy** pada repo baru.
+2. Periksa run yang dipicu commit. Untuk menjalankan ulang secara manual, pilih **Run workflow → branch main → Run workflow**.
+3. Tunggu instalasi, tes, TypeScript, audit dependency, pemeriksaan konfigurasi, deploy, dan verifikasi endpoint berhasil.
+4. Buka dashboard Cloudflare → **Workers & Pages**. Worker yang namanya diisi akan muncul.
+5. Cocokkan URL sebenarnya dengan `publicOrigin`. Bila berbeda, edit `installation.json` di GitHub lalu commit ke `main` untuk deploy ulang.
+
+Deploy pertama membuat Worker beserta binding. **Login belum siap sampai secrets runtime pada langkah 10 diisi.** Smoke test awal memeriksa endpoint publik dan penolakan akses anonim, bukan login OAuth.
+
+Jangan mengaktifkan Cloudflare Builds/auto-build dari repo untuk target yang sama. Pembaruan source aplikasi tetap melalui GitHub Actions.
+
+## 10. Buat OAuth App dan isi secrets Worker melalui web
+
+### OAuth App di GitHub
+
+Akun GitHub tujuan → **Settings → Developer settings → OAuth Apps → New OAuth App**.
 
 | Pengaturan | Nilai |
 | --- | --- |
-| Application name | Nama bebas, misalnya MCP Pribadi |
-| Homepage URL | Nilai `publicOrigin` yang sebenarnya |
-| Authorization callback URL | Nilai `publicOrigin` diikuti `/callback` |
+| Homepage URL | `publicOrigin` yang sudah cocok dengan Worker |
+| Authorization callback URL | `publicOrigin` diikuti `/callback` |
 
-Catat Client ID dan buat Client Secret baru. MCP meminta scope `repo`, `read:user`, dan `workflow`; untuk pemakaian pribadi, pahami bahwa scope `repo` memberi akses luas pada repo yang bisa diakses akun itu. Jangan membuka allowlist untuk pengguna lain bila token tool Cloudflare memakai akun pribadi bersama.
+Buat Client Secret baru. App meminta scope `repo`, `read:user`, dan `workflow`. Batasi login instance pribadi dengan allowlist akun Anda.
 
-## 5. Isi secrets Worker
+### Secrets runtime di Cloudflare
 
-Jalankan satu per satu; masukkan nilai pada prompt, bukan sebagai argumen perintah:
+1. **Workers & Pages → nama Worker → Settings → Variables and Secrets → Add**.
+2. Pilih tipe **Secret** dan isi:
 
-```sh
-npx wrangler secret put GITHUB_CLIENT_ID
-npx wrangler secret put GITHUB_CLIENT_SECRET
-npx wrangler secret put COOKIE_ENCRYPTION_KEY
-```
+| Nama secret Worker | Nilai |
+| --- | --- |
+| `GITHUB_CLIENT_ID` | Client ID OAuth App baru |
+| `GITHUB_CLIENT_SECRET` | Client Secret OAuth App baru |
+| `COOKIE_ENCRYPTION_KEY` | Nilai acak kriptografis baru, minimal 32 byte |
 
-Untuk `COOKIE_ENCRYPTION_KEY`, buat nilai baru dengan password manager/generator kriptografis, minimal 32 byte. Jangan salin dari instance lama atau masukkan nilainya ke Git/ZIP.
+3. Buat key acak dengan password manager/generator aman; jangan menggunakan key instance lama atau layanan pembuat key yang tidak dipercaya.
+4. Klik **Deploy** pada form secrets untuk menerapkan konfigurasi. Tombol ini menerapkan perubahan secret; source aplikasi tetap berasal dari GitHub Actions.
 
-Untuk memakai tool Cloudflare dan dashboard deployment, isi juga:
+Opsional: tambahkan `CLOUDFLARE_API_TOKEN` dan `CLOUDFLARE_ACCOUNT_ID` pada **Worker** untuk tool Cloudflare; batasi token runtime sesuai layanan yang digunakan. Tambahkan `BRAVE_API_KEY` untuk `web_search`.
 
-```sh
-npx wrangler secret put CLOUDFLARE_API_TOKEN
-npx wrangler secret put CLOUDFLARE_ACCOUNT_ID
-```
+Secrets bernama sama pada GitHub dan Worker adalah dua penyimpanan terpisah. Mengisi secrets GitHub tidak mengisi secrets runtime Worker. Secrets yang disimpan melalui dashboard tetap dipertahankan pada deploy kode Wrangler berikutnya; jangan memasukkan nilainya ke `[vars]`.
 
-Batasi token pada akun tujuan dan izin layanan yang akan digunakan. Tanpa pasangan ini, fitur GitHub tetap dapat digunakan, tetapi tool Cloudflare terkait akan menampilkan belum dikonfigurasi. Untuk pencarian Brave, opsional:
+## 11. Verifikasi login dan MCP
 
-```sh
-npx wrangler secret put BRAVE_API_KEY
-```
+1. Buka `publicOrigin` → **Masuk dengan GitHub** dengan akun yang diizinkan.
+2. Pastikan callback kembali ke dashboard.
+3. Tambahkan connector MCP pada aplikasi AI dengan endpoint **`publicOrigin` + `/mcp`**, lalu login dan setujui koneksi.
+4. Jalankan `list_skills` dan `get_skill_instructions` untuk `byga-cloudflare-fullstack`. Sumber skill harus repo baru.
+5. Uji baca satu file repo yang dapat diakses akun baru. Uji tulis hanya pada repo/branch percobaan bila diperlukan.
+6. Gunakan dashboard Cloudflare → Worker → **Deployments/Observability** untuk memeriksa deployment dan error. Periksa audit dashboard MCP setelah tindakan tulis.
 
-File `.dev.vars.example` hanya untuk pengembangan lokal. Mengisi `.dev.vars` tidak memasang secret di Worker remote. Sediakan OAuth App pengembangan terpisah bila membutuhkan login lokal.
+`/mcp` yang dibuka tanpa token dan mengembalikan `401` adalah perilaku yang benar. CI/smoke test hijau tidak menggantikan verifikasi login, izin, dan tool akun sebenarnya.
 
-## 6. Validasi dan migrasi database baru
+## 12. Pembaruan, rollback, dan domain
 
-```sh
-npm run check:installation
-npm test
-npm run type-check
-npx wrangler deploy --dry-run --outdir work/build
-npx wrangler d1 migrations apply AUDIT_DB --remote
-```
-
-Semua pemeriksaan harus berhasil. Pastikan migrasi diarahkan ke database BARU yang ID-nya sudah dimasukkan. Jangan menggunakan perintah reset atau menghapus resource lama. Migrasi D1 tidak otomatis dijalankan oleh workflow deploy; jalankan sebelum rilis yang memerlukannya.
-
-## 7. Siapkan GitHub Actions dan push repo baru
-
-Di repo tujuan, buka Settings → Environments, buat environment bernama `production`, lalu tambahkan secrets:
-
-- `CLOUDFLARE_API_TOKEN`: token deployment untuk akun tujuan, misalnya dari template Edit Cloudflare Workers dengan cakupan akun yang sesuai.
-- `CLOUDFLARE_ACCOUNT_ID`: ID akun Cloudflare tujuan.
-
-Pastikan token dapat mengunggah Worker serta mengakses binding yang dipakai. Tambahkan izin domain bila menggunakan custom domain. Token ini terpisah dari secret runtime Worker. Aktifkan Actions bila belum aktif. Protection/required reviewer pada environment boleh digunakan jika tersedia pada paket GitHub Anda.
-
-Inisialisasi repo di folder hasil ekstrak:
-
-```sh
-git init -b main
-git add .
-git diff --cached --stat
-git commit -m "Initial private MCP setup"
-git remote add origin https://github.com/USERNAME_BARU/REPO_BARU.git
-git push -u origin main
-```
-
-Ganti URL remote dengan repo yang benar. Periksa file staging sebelum commit; jangan memasukkan token, `.dev.vars`, `.env`, atau file backup data. Bila HTTPS meminta autentikasi, gunakan GitHub CLI/credential manager atau PAT melalui prompt; jangan menaruh PAT di URL.
-
-Push pertama menjalankan CI dan workflow Deploy. Periksa tab Actions sampai keduanya berhasil, termasuk langkah smoke test. `CI` dan `Deploy` menjalankan pemeriksaan terpisah; untuk merge berikutnya, gunakan branch/PR dan wajibkan pemeriksaan CI melalui ruleset repo.
-
-Alternatif deploy manual setelah validasi/migrasi: `npm run deploy`, lalu `npm run smoke`. Pilih satu sistem auto-deploy untuk pemakaian selanjutnya. Jangan melakukan redeploy otomatis tanpa mengisi konfigurasi dan secrets akun tujuan terlebih dahulu.
-
-## 8. Verifikasi deployment dan sambungkan MCP
-
-```sh
-npm run smoke
-```
-
-Script memeriksa halaman utama/dashboard, discovery OAuth dengan PKCE S256 dan resource URL, `/mcp` tanpa token (`401`), dan API sesi tanpa cookie (`401`). Script ini tidak login atau melakukan tindakan tulis.
-
-Lanjutkan pemeriksaan manual:
-
-1. Buka `publicOrigin`, login melalui GitHub akun yang diizinkan, dan pastikan callback kembali ke dashboard.
-2. Di aplikasi AI, tambahkan/refresh connector MCP dengan URL `publicOrigin` + `/mcp`. Login dan setujui koneksi baru.
-3. Jalankan `list_skills`; ketiga skill BYGA harus tampil.
-4. Jalankan `get_skill_instructions` untuk `byga-cloudflare-fullstack`; sumbernya harus owner/repo BARU.
-5. Baca satu file repo yang memang dimiliki akun baru. Bila perlu uji tulis, gunakan branch percobaan di repo percobaan.
-6. Periksa audit setelah tindakan tulis. Audit masih best-effort; kegagalan audit tidak membatalkan operasi yang sudah terjadi.
-
-Jangan menyatakan seluruh fitur siap produksi hanya karena smoke test lulus. Uji fitur Cloudflare tambahan hanya setelah secret dan izin layanan terkait tersedia.
-
-## 9. Ganti ke custom domain (opsional)
-
-Di akun Cloudflare tujuan, pastikan domain/zone tersedia. Aktifkan blok `[[routes]]` yang dikomentari pada template dan isi hostname. Ubah `installation.publicOrigin`, Homepage URL dan callback OAuth App agar memakai domain yang sama. Commit/deploy, lalu ulangi smoke test serta reconnect connector dengan URL baru. Pakai satu origin utama secara konsisten.
-
-## 10. Memperbarui, backup, dan rollback
-
-- Untuk fitur/perbaikan: branch → PR → CI → merge → Deploy → smoke test.
-- Sebelum perubahan schema/data, backup D1 melalui fasilitas Cloudflare atau `npx wrangler d1 export AUDIT_DB --remote --output work/backup.sql`. Backup berisi data pribadi; jangan commit/sertakan dalam ZIP.
-- Catat versi Worker sebelum deploy: `npx wrangler versions list`.
-- Rollback kode bila diperlukan: `npx wrangler rollback VERSION_ID`. Ganti `VERSION_ID` dengan versi yang benar-benar tercatat.
-- Rollback Worker tidak membatalkan perubahan D1/KV, migrasi, atau tindakan GitHub. Pastikan schema lama/baru kompatibel.
+- Ubah source di GitHub, gunakan PR/CI, lalu merge ke `main` untuk deploy otomatis. Untuk mengulang deploy, gunakan Actions → Deploy → Run workflow → main.
+- Cloudflare dashboard digunakan untuk secrets, resource, observability, dan domain. Nilai non-secret yang dikelola `wrangler.toml` sebaiknya diubah melalui repo agar konsisten saat deploy berikutnya.
+- Untuk rollback source, gunakan **Revert** pada PR yang di-merge, tinjau PR revert, lalu merge agar Actions men-deploy kode tersebut. Periksa kompatibilitas database terlebih dahulu; rollback kode tidak membatalkan perubahan data.
+- Untuk schema D1, buat backup melalui fasilitas dashboard yang tersedia sebelum perubahan, lalu jalankan SQL yang diperlukan di Console.
+- Untuk custom domain, siapkan domain/route dan cocokkan `publicOrigin`, OAuth Homepage URL, callback URL, serta endpoint connector. Gunakan satu alamat utama secara konsisten.
 
 ## Troubleshooting
 
-| Gejala | Pemeriksaan/perbaikan |
+| Gejala | Perbaikan melalui web |
 | --- | --- |
-| `check:installation` gagal | Ganti placeholder; cocokkan nama Worker dan origin; periksa ID KV/D1 |
-| GitHub Actions tidak deploy | Periksa trigger branch/path, environment `production`, approval, dan kedua secrets CI |
-| `/mcp` tanpa login menghasilkan `401` | Ini perilaku yang benar; gunakan alur OAuth connector |
-| GitHub `authentication expired or revoked` | Reconnect MCP dan login ulang; dashboard dapat memerlukan logout/login ulang. Membuat ZIP/deploy ulang tidak memperbarui token lama |
-| Akun ditolak `403` | Cocokkan username GitHub dengan `GITHUB_ALLOWED_USERS` |
-| Callback OAuth gagal | Cocokkan scheme, hostname, `/callback`, dan OAuth App yang dipakai |
-| Skill tidak bisa dibaca | Periksa owner/repo/ref di `installation.json`, isi folder `skills/`, izin repo private, lalu refresh discovery tool |
-| Audit gagal dibaca | Periksa binding D1 dan migrasi `0001_create_audit_log.sql` |
-| Tool Cloudflare belum dikonfigurasi/`403` | Isi pasangan secret runtime Worker; periksa cakupan akun dan izin token |
-| Smoke test gagal setelah deploy | Deployment sudah terjadi; baca langkah yang gagal dan logs. Script tidak melakukan rollback otomatis |
+| Deploy/Run workflow tidak muncul | Pastikan `.github/workflows/deploy.yml` ada di branch default `main` dan Actions aktif |
+| Job Deploy dilewati | Pilih branch `main`; workflow tidak men-deploy branch lain |
+| Pemeriksaan konfigurasi gagal | Edit dua file konfigurasi di GitHub dan ganti placeholder, lalu commit |
+| Deploy mendapat `403` | Periksa Repository secrets, Account ID, dan izin token deploy |
+| Login belum dikonfigurasi/`503` | Isi tiga secrets runtime Worker di Variables and Secrets |
+| Login akun ditolak `403` | Cocokkan `GITHUB_ALLOWED_USERS` pada repo, lalu tunggu deploy Actions |
+| Callback OAuth gagal | Cocokkan origin dan `/callback` pada OAuth App, lalu reconnect |
+| Token GitHub kedaluwarsa/dicabut | Reconnect connector dan login ulang; bila perlu logout/login dashboard MCP |
+| Tabel audit tidak ada | Jalankan SQL dari file migrasi pada Console database D1 yang benar |
+| Tool Cloudflare belum dikonfigurasi | Isi pasangan secrets runtime Cloudflare pada Worker; secrets CI saja tidak cukup |
+| Skill gagal dibaca | Periksa owner/repo/ref dan folder `skills/` pada repo tujuan |
+| Smoke test gagal setelah deploy | Source sudah terunggah; baca langkah yang gagal dan logs. Tidak ada rollback otomatis |
 
-## Membuat ZIP portabel ulang
+## Referensi resmi
 
-```sh
-python3 scripts/export-portable.py --output work/private-mcp-portable.zip
-```
-
-ZIP berisi source, lockfile, skills, migrasi, workflow, dan panduan. Konfigurasi aktif diganti template. Sesi/data lama, dependencies terinstal, logs, `.git`, dan secrets tidak dibawa. Membuat ZIP tidak membuat repo, resource, atau deployment baru.
+- [GitHub Actions](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/)
+- [Secrets melalui dashboard](https://developers.cloudflare.com/workers/configuration/secrets/)
+- [Workers KV](https://developers.cloudflare.com/kv/get-started/)
+- [D1 dan Console](https://developers.cloudflare.com/d1/get-started/)
+- [Alamat workers.dev](https://developers.cloudflare.com/workers/configuration/routing/workers-dev/)

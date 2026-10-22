@@ -33,7 +33,8 @@ def portable_files():
     files['installation.json'] = (ROOT / 'installation.example.json').read_bytes()
     files['wrangler.toml'] = (ROOT / 'wrangler.example.toml').read_bytes()
     files['README.md'] = (
-        '# MCP pribadi — paket portabel\n\n'
+        '# MCP pribadi — GitHub Actions + dashboard Cloudflare\n\n'
+        '**Untuk repo BARU; jangan merge branch ekspor ke instance lama.**\n\n'
         'Mulai dari [BACA-DULU.md](BACA-DULU.md).\n\n'
         'Konfigurasi akun tujuan ditandai `GANTI_INSTALASI`. Isi `installation.json` '
         'dan `wrangler.toml`, buat secrets/resource baru, lalu ikuti '
