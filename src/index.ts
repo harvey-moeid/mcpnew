@@ -1,6 +1,7 @@
 import OAuthProvider from '@cloudflare/workers-oauth-provider'
 import { GitHubHandler } from './github-handler'
 import { MyMCP } from './mcp-agent'
+import installation from '../installation.json' with { type: 'json' }
 
 // Durable Object class must be exported from the entry module so wrangler
 // can bind it (see wrangler.toml -> durable_objects.bindings).
@@ -9,7 +10,7 @@ export { MyMCP }
 export default new OAuthProvider({
   apiRoute: '/mcp',
   resourceMetadata: {
-    resource: 'https://mcpnew.muidsoft.com/mcp',
+    resource: `${installation.publicOrigin}/mcp`,
   },
   apiHandler: MyMCP.serve('/mcp'),
   defaultHandler: GitHubHandler,

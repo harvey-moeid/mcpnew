@@ -1,0 +1,8 @@
+{
+  "_instructions": "GANTI_INSTALASI: ubah lima nilai di bawah saat pindah akun; lihat docs/PINDAH-AKUN-DAN-DEPLOY.md.",
+  "publicOrigin": "https://mcpnew.muidsoft.com",
+  "githubOwner": "harvey-moeid",
+  "githubRepo": "mcpnew",
+  "githubRef": "main",
+  "workerName": "github-mcp-server"
+}

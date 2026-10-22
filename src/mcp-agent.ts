@@ -33,6 +33,7 @@ import {
   getWorkerAnalytics, getPagesAnalytics,
 } from './cloudflare'
 import { fetchUrl, webSearch } from './web'
+import installation from '../installation.json' with { type: 'json' }
 import { releaseChecklistPrompt, prReviewPrompt, repoCleanupPrompt } from './prompts'
 import { getSkills, getSkill, readSkillFile, installSkillFromGitHub, setSkillEnabled, uninstallSkill } from './skill-registry'
 
@@ -798,7 +799,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
 
     this.server.registerTool('get_worker_deployment_status', {
       description: 'Check the current deployment status of a Cloudflare Worker.',
-      inputSchema: { script_name: z.string().default('github-mcp-server') },
+      inputSchema: { script_name: z.string().default(installation.workerName) },
       annotations: { title: 'Get Worker deployment status', readOnlyHint: true, openWorldHint: true },
     }, withErrorHandling(async ({ script_name }) => {
       const { deployments } = await getWorkerDeployments(this.env, script_name)

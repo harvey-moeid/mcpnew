@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { readSession, destroySession, sameOrigin, type DashboardSession } from './dashboard-auth'
 import { getWorkerDeployments, CloudflareApiError } from './cloudflare'
+import installation from '../installation.json' with { type: 'json' }
 
 type DashboardVariables = { session: DashboardSession }
 export const dashboardApi = new Hono<{ Bindings: Env; Variables: DashboardVariables }>()
@@ -47,7 +48,7 @@ dashboardApi.get('/session', c => {
     configuration: { cloudflare: Boolean(c.env.CLOUDFLARE_API_TOKEN && c.env.CLOUDFLARE_ACCOUNT_ID),
       audit: Boolean(c.env.AUDIT_DB), protectedBranches: c.env.PROTECTED_BRANCHES ?? 'main,master',
       directPushAllowed: c.env.ALLOW_DIRECT_PUSH_TO_PROTECTED === 'true',
-      endpoint: `${new URL(c.req.url).origin}/mcp`, worker: 'github-mcp-server' } })
+      endpoint: `${new URL(c.req.url).origin}/mcp`, worker: installation.workerName } })
 })
 
 dashboardApi.post('/logout', async c => {
@@ -123,7 +124,7 @@ dashboardApi.get('/repository', async c => {
 
 dashboardApi.get('/deployments', async c => {
   if (!c.env.CLOUDFLARE_API_TOKEN || !c.env.CLOUDFLARE_ACCOUNT_ID) return c.json({ configured: false, deployments: [] })
-  const result = await getWorkerDeployments(c.env, 'github-mcp-server')
+  const result = await getWorkerDeployments(c.env, installation.workerName)
   return c.json({ configured: true, deployments: result.deployments.slice(0, 20).map(deployment => ({
     id: deployment.id, createdAt: deployment.created_on, strategy: deployment.strategy,
     versions: deployment.versions?.map(version => ({ id: version.version_id, percentage: version.percentage })),

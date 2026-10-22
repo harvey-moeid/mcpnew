@@ -12,6 +12,44 @@ export class WebSearchError extends Error {}
 const DEFAULT_TIMEOUT_MS = 15000
 const DEFAULT_MAX_LENGTH = 8000
 const MAX_MAX_LENGTH = 30000
+const MAX_RESPONSE_BYTES = 1024 * 1024
+
+/** Read at most 1 MiB of decoded response bytes, including for chunked bodies.
+ * The abort listener also cancels a body that stalls after receiving headers.
+ */
+async function readBodyPrefix(response: Response, signal: AbortSignal): Promise<{ text: string; truncated: boolean }> {
+  signal.throwIfAborted()
+  if (!response.body) return { text: '', truncated: false }
+  const reader = response.body.getReader()
+  const buffer = new Uint8Array(MAX_RESPONSE_BYTES)
+  let bytes = 0
+  let truncated = false
+  let onAbort: () => void = () => {}
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(signal.reason)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+  try {
+    while (true) {
+      signal.throwIfAborted()
+      const chunk = await Promise.race([reader.read(), aborted])
+      signal.throwIfAborted()
+      if (chunk.done) break
+      const remaining = MAX_RESPONSE_BYTES - bytes
+      const bounded = chunk.value.subarray(0, remaining)
+      buffer.set(bounded, bytes)
+      bytes += bounded.byteLength
+      if (chunk.value.byteLength > remaining) { truncated = true; break }
+    }
+    return { text: new TextDecoder().decode(buffer.subarray(0, bytes)), truncated }
+  } finally {
+    signal.removeEventListener('abort', onAbort)
+    // An upstream cancel hook can stall too: request cancellation without waiting
+    // on it, and handle its rejection so cleanup cannot delay a timeout result.
+    void reader.cancel().catch(() => {})
+    reader.releaseLock()
+  }
+}
 
 // ---------------------------------------------------------------------------
 // fetch_url
@@ -29,7 +67,8 @@ export type FetchUrlResult = {
 /**
  * GET a URL and return readable text. For HTML responses, tags/scripts/styles
  * are stripped and entities decoded; other content types are returned as-is.
- * Result is capped at maxLength characters (truncated flag set if cut off).
+ * Reads at most 1 MiB, with timeout covering headers and body. Output is also
+ * capped at maxLength characters; truncated is true when either limit is hit.
  */
 export async function fetchUrl(
   url: string,
@@ -41,40 +80,34 @@ export async function fetchUrl(
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
 
-  let res: Response
   try {
-    res = await fetch(url, {
+    const res = await fetch(url, {
       method: 'GET',
       redirect: 'follow',
       signal: controller.signal,
       headers: {
-        'User-Agent': 'mcpnew-fetch/1.0 (+https://mcpnew.muidsoft.com)',
+        'User-Agent': 'github-ops-fetch/1.0',
         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5',
       },
     })
-  } catch (err: any) {
-    clearTimeout(timer)
-    const msg = err?.name === 'AbortError' ? `Timed out after ${timeoutMs}ms` : String(err?.message ?? err)
+    const contentType = res.headers.get('content-type') ?? 'unknown'
+    const body = await readBodyPrefix(res, controller.signal)
+    const isHtml = contentType.includes('text/html') || contentType.includes('xhtml')
+    const extracted = isHtml ? htmlToText(body.text) : body.text
+    return {
+      url,
+      finalUrl: res.url || url,
+      status: res.status,
+      contentType,
+      text: extracted.slice(0, maxLength).trim(),
+      truncated: body.truncated || extracted.length > maxLength,
+    }
+  } catch (err: unknown) {
+    const msg = controller.signal.aborted ? `Timed out after ${timeoutMs}ms`
+      : err instanceof Error ? err.message : String(err)
     throw new WebFetchError(`Failed to fetch "${url}": ${msg}`)
-  }
-  clearTimeout(timer)
-
-  const contentType = res.headers.get('content-type') ?? 'unknown'
-  const raw = await res.text()
-
-  const isHtml = contentType.includes('text/html') || contentType.includes('xhtml')
-  const extracted = isHtml ? htmlToText(raw) : raw
-
-  const truncated = extracted.length > maxLength
-  const text = (truncated ? extracted.slice(0, maxLength) : extracted).trim()
-
-  return {
-    url,
-    finalUrl: res.url || url,
-    status: res.status,
-    contentType,
-    text,
-    truncated,
+  } finally {
+    clearTimeout(timer)
   }
 }
 
@@ -93,9 +126,9 @@ const ENTITIES: Record<string, string> = {
 
 function htmlToText(html: string): string {
   let out = html
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, ' ')
+    .replace(/<script\b[^>]*>[\s\S]*?(?:<\/script\s*>|$)/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?(?:<\/style\s*>|$)/gi, ' ')
     .replace(BLOCK_TAG_RE, '\n')
     .replace(/<[^>]+>/g, ' ')
 
@@ -138,32 +171,32 @@ export async function webSearch(
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
 
-  let res: Response
   try {
-    res = await fetch(`https://api.search.brave.com/res/v1/web/search?${params.toString()}`, {
+    const res = await fetch(`https://api.search.brave.com/res/v1/web/search?${params.toString()}`, {
       headers: {
         Accept: 'application/json',
         'X-Subscription-Token': env.BRAVE_API_KEY,
       },
       signal: controller.signal,
     })
-  } catch (err: any) {
-    clearTimeout(timer)
-    const msg = err?.name === 'AbortError' ? `Timed out after ${timeoutMs}ms` : String(err?.message ?? err)
+    const body = await readBodyPrefix(res, controller.signal)
+    if (!res.ok) {
+      throw new WebSearchError(`Brave Search API error (${res.status}): ${body.text.slice(0, 200) || res.statusText}`)
+    }
+    if (body.truncated) throw new WebSearchError('Brave Search response exceeds the 1 MiB limit.')
+    const json = JSON.parse(body.text)
+    const results = json?.web?.results ?? []
+    return results.map((r: { title?: string; url?: string; description?: string }) => ({
+      title: r.title ?? '(untitled)',
+      url: r.url ?? '',
+      description: String(r.description ?? '').replace(/<[^>]+>/g, ''),
+    }))
+  } catch (err: unknown) {
+    if (err instanceof WebSearchError) throw err
+    const msg = controller.signal.aborted ? `Timed out after ${timeoutMs}ms`
+      : err instanceof Error ? err.message : String(err)
     throw new WebSearchError(`Brave Search request failed: ${msg}`)
+  } finally {
+    clearTimeout(timer)
   }
-  clearTimeout(timer)
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new WebSearchError(`Brave Search API error (${res.status}): ${body.slice(0, 200) || res.statusText}`)
-  }
-
-  const json = (await res.json()) as any
-  const results = json?.web?.results ?? []
-  return results.map((r: any) => ({
-    title: r.title ?? '(untitled)',
-    url: r.url ?? '',
-    description: String(r.description ?? '').replace(/<[^>]+>/g, ''),
-  }))
 }

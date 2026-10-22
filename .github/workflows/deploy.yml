@@ -8,9 +8,15 @@ on:
       - 'wrangler.toml'
       - 'package.json'
       - 'package-lock.json'
+      - 'installation.json'
+      - 'scripts/**'
+      - '.github/workflows/deploy.yml'
+
+permissions:
+  contents: read
 
 concurrency:
-  group: deploy-github-mcp-server
+  group: deploy-${{ github.repository }}-production
   cancel-in-progress: false
 
 jobs:
@@ -38,8 +44,14 @@ jobs:
       - name: Audit dependencies
         run: npm audit --audit-level=high
 
+      - name: Check installation configuration
+        run: npm run check:installation
+
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Verify public endpoints and unauthenticated access
+        run: npm run smoke
