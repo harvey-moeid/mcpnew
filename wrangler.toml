@@ -1,56 +1,44 @@
-# GANTI_INSTALASI: untuk akun baru gunakan wrangler.example.toml dan panduan docs/PINDAH-AKUN-DAN-DEPLOY.md.
-name = "github-mcp-server" # GANTI_INSTALASI: harus sama dengan installation.json workerName
+# GANTI_INSTALASI: template untuk Worker BARU. Jangan arahkan ke resource lama.
+# Isi juga installation.json; nama Worker dan origin harus konsisten.
+name = "ganti-nama-worker" # GANTI_INSTALASI: sama dengan installation.workerName
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = true
 
-# Durable Object that backs the MCP session (McpAgent).
 [[durable_objects.bindings]]
-name = "MCP_OBJECT"
-class_name = "MyMCP"
+name = "MCP_OBJECT" # TETAP: nama binding yang dipakai kode
+class_name = "MyMCP" # TETAP: nama class yang diekspor
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["MyMCP"]
 
-# KV namespace required by @cloudflare/workers-oauth-provider (must be named OAUTH_KV).
 [[kv_namespaces]]
-binding = "OAUTH_KV"
-id = "e585b71dbef14a049c3c785d7ff1b368" # GANTI_INSTALASI: namespace baru
+binding = "OAUTH_KV" # TETAP
+id = "GANTI_KV_NAMESPACE_ID" # GANTI_INSTALASI: hasil wrangler kv namespace create
 
-# D1 database for the audit log (every write/destructive tool call is recorded here).
 [[d1_databases]]
-binding = "AUDIT_DB"
-database_name = "github-mcp-audit-log" # GANTI_INSTALASI: nama D1 baru
-database_id = "d5d8057f-6be6-4d8d-bfc6-56006dd39ffc" # GANTI_INSTALASI: UUID D1 baru
+binding = "AUDIT_DB" # TETAP
+database_name = "ganti-nama-database" # GANTI_INSTALASI: nama D1 baru
+database_id = "GANTI_D1_DATABASE_ID" # GANTI_INSTALASI: UUID hasil wrangler d1 create
 migrations_dir = "migrations"
 
 [vars]
-# Comma-separated GitHub usernames allowed to use this server.
-# Hanya harvey-moeid yang diizinkan masuk.
-GITHUB_ALLOWED_USERS = "harvey-moeid" # GANTI_INSTALASI: username akun tujuan
-
-# Comma-separated branches that push_files/delete_file cannot write to directly.
-# Forces the create_branch -> push_files -> create_pull_request -> merge_pull_request flow.
+GITHUB_ALLOWED_USERS = "GANTI_USERNAME_GITHUB" # GANTI_INSTALASI: akun pribadi yang boleh masuk
 PROTECTED_BRANCHES = "main,master"
-
-# Set to "true" to disable the protected-branch guardrail (not recommended for shared repos).
 ALLOW_DIRECT_PUSH_TO_PROTECTED = "false"
 
 [observability]
 enabled = true
 
-[[routes]]
-pattern = "mcpnew.muidsoft.com" # GANTI_INSTALASI: cocokkan installation.json publicOrigin
-custom_domain = true
+# OPSIONAL: aktifkan hanya setelah domain berada di akun Cloudflare tujuan.
+# GANTI_INSTALASI: perbarui installation.publicOrigin dan callback OAuth bila ganti domain.
+# [[routes]]
+# pattern = "GANTI_DOMAIN.example"
+# custom_domain = true
 
-# Secrets (set via `wrangler secret put`, never committed):
-#   GITHUB_CLIENT_ID
-#   GITHUB_CLIENT_SECRET
-#   COOKIE_ENCRYPTION_KEY
-#   CLOUDFLARE_API_TOKEN     <- used by get_worker_deployment_status + R2 tools (src/cloudflare.ts)
-#   CLOUDFLARE_ACCOUNT_ID    <- used by get_worker_deployment_status + R2 tools (src/cloudflare.ts)
-#   BRAVE_API_KEY            <- optional, used by web_search (src/web.ts); fetch_url needs no key
-
-# Last manual deploy trigger: 2026-09-02 (deps update + mojibake fix)
-# v2.0.0: updated all deps to latest (agents 0.22, MCP SDK 1.30, zod 4, wrangler 4.128)
+# SECRET: isi lewat wrangler secret put atau dashboard, bukan di file ini.
+# GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, COOKIE_ENCRYPTION_KEY
+# CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (opsional untuk tool Cloudflare)
+# BRAVE_API_KEY (opsional untuk web_search)
