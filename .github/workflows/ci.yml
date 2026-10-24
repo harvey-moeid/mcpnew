@@ -47,10 +47,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Audit dependencies
+      - name: Show security-relevant dependency versions
+        run: npm ls body-parser fast-uri undici || true
+
+      - name: Audit dependencies (fail on high/critical)
         run: npm audit --audit-level=high
 
       - name: Scan for leaked secrets
-        uses: trufflesecurity/trufflehog@main
+        if: ${{ !cancelled() }}
+        uses: trufflesecurity/trufflehog@31ce31ee1abbcc7dc8eee5764c17121c3044c8b2
         with:
           extra_args: --only-verified
