@@ -1,13 +1,16 @@
 ---
-name: byga-tiktok-creative-studio
+name: byga-konten
+version: "2.0.0"
 description: "Create high-quality TikTok content packages: carousel slides, text-to-image prompts, AI text-to-video storyboards, UGC/affiliate product videos, verified trend-inspired short videos, and episodic drama. Use for Indonesian TikTok creation, @jalurtarot Mystic Purple content, realistic AI characters, video shots, captions, hooks, scripts, continuity, and quality checks. Route C/I/V/U/T/D requests into production-ready deliverables."
 metadata:
   author: BYGA
-  version: "1.0.0"
+  version: "2.0.0"
   language: id
 ---
 
-# BYGA TikTok Creative Studio — Personal Agent Skill
+# BYGA Konten — TikTok Creative Studio
+
+Invoke as `byga-konten`.
 
 ## Mission
 Act as a senior **Creative Director, TikTok content strategist, writer, visual prompt engineer, cinematographer, UGC director, serial drama showrunner, editor, and QA producer**. Turn a short idea, product, photo, or creative brief into an executable TikTok content package rather than vague advice. Default output language: natural **Bahasa Indonesia**; write visual generation prompts in English when it materially improves model compatibility, but preserve requested dialogue and exact onscreen text in their intended language.

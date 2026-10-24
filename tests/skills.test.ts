@@ -25,16 +25,13 @@ const mockGitHub = {
 test('all BYGA built-in skills are discoverable', async () => {
   const kv = mockKV()
   const entries = await getSkills(kv as any, 'actor')
-  assert.equal(entries.length, 3)
+  assert.deepEqual(entries.map(x => x.name), ['byga-coding', 'byga-konten', 'byga-prompt'])
   assert.deepEqual(entries.map(x => x.name), BUILTIN_SKILLS.map(x => x.name).sort())
-  assert.equal((await getSkill(kv as any, 'actor', 'byga-coding-engineering')).enabled, true)
+  assert.equal((await getSkill(kv as any, 'actor', 'byga-coding')).enabled, true)
 })
 
-test('Cloudflare fullstack skill loads its packaged instructions through the registry', async () => {
+test('canonical skills load packaged instructions and referenced files through the registry', async () => {
   const kv = mockKV()
-  const skill = await getSkill(kv as any, 'actor', 'byga-cloudflare-fullstack')
-  assert.equal(skill.builtIn, true)
-  assert.equal(skill.enabled, true)
   const github = { rest: { repos: { async getContent({ owner, repo, path, ref }: {
     owner: string; repo: string; path: string; ref: string
   }) {
@@ -45,14 +42,73 @@ test('Cloudflare fullstack skill loads its packaged instructions through the reg
     return { data: { type: 'file', encoding: 'base64', size: content.length,
       content: content.toString('base64') } }
   } } } }
-  const instructions = await readSkillFile(github as any, skill)
-  const header = parseSkillHeader(instructions)
-  assert.equal(header.name, skill.name)
-  assert.equal(header.description, skill.description)
-  assert.match(instructions, /Mode default: FULL\./)
-  await setSkillEnabled(kv as any, 'actor', skill.name, false)
-  assert.equal((await getSkill(kv as any, 'actor', skill.name)).enabled, false)
-  assert.equal((await getSkill(kv as any, 'another-user', skill.name)).enabled, true)
+  for (const builtin of BUILTIN_SKILLS) {
+    const skill = await getSkill(kv as any, 'actor', builtin.name)
+    assert.equal(skill.builtIn, true)
+    assert.equal(skill.enabled, true)
+    assert.equal(skill.source.path, `skills/${skill.name}`)
+    const instructions = await readSkillFile(github as any, skill)
+    const header = parseSkillHeader(instructions)
+    assert.equal(header.name, skill.name)
+    assert.equal(header.version, skill.version)
+    assert.ok(header.description.length > 0)
+    const referencedFiles = [...instructions.matchAll(/`((?:references|assets|scripts|examples)\/[\w./-]+)`/g)]
+    assert.ok(referencedFiles.length > 0)
+    for (const [, file] of referencedFiles) {
+      assertSafePath(file)
+      assert.ok((await readSkillFile(github as any, skill, file)).trim(), `${skill.name}/${file}`)
+    }
+    await setSkillEnabled(kv as any, 'actor', skill.name, false)
+    const disabled = await getSkill(kv as any, 'actor', skill.name)
+    await assert.rejects(() => readSkillFile(github as any, disabled), /disabled/)
+    assert.equal((await getSkill(kv as any, 'another-user', skill.name)).enabled, true)
+  }
+})
+
+const legacyNames = {
+  'byga-cloudflare-fullstack': 'byga-coding',
+  'byga-coding-engineering': 'byga-coding',
+  'byga-tiktok-creative-studio': 'byga-konten',
+  'byga-prompt-enhancer': 'byga-prompt',
+}
+function legacySetting(name: string, enabled: boolean) {
+  return { name, enabled, builtIn: true, description: 'Old metadata',
+    source: { owner: 'old-owner', repo: 'old-repo', ref: 'old-ref', path: `skills/${name}` } }
+}
+
+test('legacy IDs resolve to canonical sources and retain disabled settings without duplicates', async () => {
+  for (const [old, canonical] of Object.entries(legacyNames)) {
+    const kv = mockKV()
+    await kv.put(`mcp-skill:actor:${old}`, JSON.stringify(legacySetting(old, false)))
+    const skill = await getSkill(kv as any, 'actor', old)
+    assert.equal(skill.name, canonical)
+    assert.equal(skill.enabled, false)
+    assert.equal(skill.source.owner, installation.githubOwner)
+    assert.equal(skill.source.repo, installation.githubRepo)
+    assert.equal(skill.source.path, `skills/${canonical}`)
+    const entries = await getSkills(kv as any, 'actor')
+    assert.deepEqual(entries.map(x => x.name), ['byga-coding', 'byga-konten', 'byga-prompt'])
+    assert.equal(entries.find(x => x.name === canonical)?.enabled, false)
+    assert.equal((await getSkill(kv as any, 'other-user', canonical)).enabled, true)
+    await setSkillEnabled(kv as any, 'actor', old, true)
+    assert.equal(JSON.parse(kv.store.get(`mcp-skill:actor:${canonical}`)!).enabled, true)
+    assert.equal((await getSkill(kv as any, 'actor', old)).enabled, true)
+    assert.equal((await getSkills(kv as any, 'actor')).find(x => x.name === canonical)?.enabled, true)
+    await setSkillEnabled(kv as any, 'actor', canonical, false)
+    assert.equal((await getSkill(kv as any, 'actor', old)).enabled, false)
+    await assert.rejects(() => uninstallSkill(kv as any, 'actor', old), /Built-in/)
+  }
+})
+
+test('either disabled engineering skill disables the merged skill until explicitly enabled', async () => {
+  const kv = mockKV()
+  await kv.put('mcp-skill:actor:byga-cloudflare-fullstack', JSON.stringify(legacySetting('byga-cloudflare-fullstack', true)))
+  await kv.put('mcp-skill:actor:byga-coding-engineering', JSON.stringify(legacySetting('byga-coding-engineering', false)))
+  assert.equal((await getSkill(kv as any, 'actor', 'byga-coding')).enabled, false)
+  assert.equal((await getSkills(kv as any, 'actor')).find(x => x.name === 'byga-coding')?.enabled, false)
+  await setSkillEnabled(kv as any, 'actor', 'byga-coding', true)
+  assert.equal((await getSkill(kv as any, 'actor', 'byga-cloudflare-fullstack')).enabled, true)
+  assert.equal((await getSkill(kv as any, 'actor', 'byga-coding-engineering')).enabled, true)
 })
 
 test('manifest validation and traversal prevention', () => {
@@ -77,13 +133,15 @@ test('install, load, disable, enable, and remove custom skill per account', asyn
   await setSkillEnabled(kv as any, 'actor', installed.name, true)
   await uninstallSkill(kv as any, 'actor', installed.name)
   await assert.rejects(() => getSkill(kv as any, 'actor', installed.name), /not installed/)
-  await assert.rejects(() => uninstallSkill(kv as any, 'actor', 'byga-coding-engineering'), /Built-in/)
+  await assert.rejects(() => uninstallSkill(kv as any, 'actor', 'byga-coding'), /Built-in/)
 })
 
-test('rejects replacing built-ins and invalid sources', async () => {
+test('rejects replacing canonical or legacy built-ins and invalid sources', async () => {
   const kv = mockKV()
-  const original = manifest.replace('custom-byga-skill', 'byga-coding-engineering')
-  const gh = { rest: { repos: { async getContent() { return { data: { type: 'file', encoding: 'base64', size: original.length, content: Buffer.from(original).toString('base64') } } } } } }
-  await assert.rejects(() => installSkillFromGitHub(gh as any, kv as any, 'actor', { owner: 'a', repo: 'b', path: 'skill' }), /built in/)
-  await assert.rejects(() => installSkillFromGitHub(gh as any, kv as any, 'actor', { owner: 'a', repo: 'b', path: '../skill' }), /Invalid/)
+  for (const name of [...BUILTIN_SKILLS.map(x => x.name), ...Object.keys(legacyNames)]) {
+    const original = manifest.replace('custom-byga-skill', name)
+    const gh = { rest: { repos: { async getContent() { return { data: { type: 'file', encoding: 'base64', size: original.length, content: Buffer.from(original).toString('base64') } } } } } }
+    await assert.rejects(() => installSkillFromGitHub(gh as any, kv as any, 'actor', { owner: 'a', repo: 'b', path: 'skill' }), /built in/)
+    await assert.rejects(() => installSkillFromGitHub(gh as any, kv as any, 'actor', { owner: 'a', repo: 'b', path: '../skill' }), /Invalid/)
+  }
 })

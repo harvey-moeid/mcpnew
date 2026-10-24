@@ -19,22 +19,22 @@ export type SkillEntry = {
 
 export const BUILTIN_SKILLS: SkillEntry[] = [
   {
-    name: 'byga-cloudflare-fullstack',
-    description: 'End-to-end software engineering skill untuk menyusun PRD, merancang arsitektur Cloudflare, mengimplementasikan aplikasi, menyiapkan GitHub CI/CD, deployment, debugging, dan verifikasi produksi.',
-    version: '1.0.0', builtIn: true, enabled: true,
-    source: { ...skillSource, path: 'skills/byga-cloudflare-fullstack' },
+    name: 'byga-prompt',
+    description: 'Enhance image and video prompts with intent preservation, reference and continuity locks, model-aware visual direction, and evidence-based evaluation and refinement.',
+    version: '2.0.0', builtIn: true, enabled: true,
+    source: { ...skillSource, path: 'skills/byga-prompt' },
   },
   {
-    name: 'byga-tiktok-creative-studio',
+    name: 'byga-coding',
+    description: 'Unified engineering workflow for PRD, architecture, implementation, debugging, audits, GitHub CI/CD, Cloudflare operations, security and production verification.',
+    version: '2.0.0', builtIn: true, enabled: true,
+    source: { ...skillSource, path: 'skills/byga-coding' },
+  },
+  {
+    name: 'byga-konten',
     description: 'TikTok carousel, prompts for images and videos, UGC affiliate, creative trends and episodic drama.',
-    version: '1.0.0', builtIn: true, enabled: true,
-    source: { ...skillSource, path: 'skills/byga-tiktok-creative-studio' },
-  },
-  {
-    name: 'byga-coding-engineering',
-    description: 'Code audits, implementation, debugging, GitHub Actions and PRs, Cloudflare operations and security.',
-    version: '1.0.0', builtIn: true, enabled: true,
-    source: { ...skillSource, path: 'skills/byga-coding-engineering' },
+    version: '2.0.0', builtIn: true, enabled: true,
+    source: { ...skillSource, path: 'skills/byga-konten' },
   },
 ]
 
@@ -42,6 +42,34 @@ const prefix = (actor: string) => `mcp-skill:${actor}:`
 const key = (actor: string, name: string) => prefix(actor) + name
 const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/
 const REPO_PART = /^[A-Za-z0-9_.-]{1,100}$/
+
+// Keep existing sessions and per-account disabled settings usable after renaming.
+// Discovery exposes only the canonical names, with current checked-in sources.
+const LEGACY_NAMES: Record<string, string> = {
+  'byga-cloudflare-fullstack': 'byga-coding',
+  'byga-coding-engineering': 'byga-coding',
+  'byga-tiktok-creative-studio': 'byga-konten',
+  'byga-prompt-enhancer': 'byga-prompt',
+}
+const canonicalName = (name: string) => Object.hasOwn(LEGACY_NAMES, name) ? LEGACY_NAMES[name] : name
+
+function parseStoredSkill(raw: string | null, name: string): SkillEntry | undefined {
+  if (!raw) return undefined
+  try {
+    const skill = JSON.parse(raw) as SkillEntry
+    if (skill?.name === name && typeof skill.enabled === 'boolean' && skill.source) return skill
+  } catch { /* Ignore unusable registry records, retaining checked-in defaults. */ }
+  return undefined
+}
+
+function withStoredSetting(builtIn: SkillEntry, stored: Map<string, SkillEntry>): SkillEntry {
+  const current = stored.get(builtIn.name)
+  // An explicit setting under the new ID wins. Otherwise retain a disabled
+  // legacy built-in; either disabled engineering skill disables the merged one.
+  const enabled = current ? current.enabled : !Object.entries(LEGACY_NAMES).some(([old, name]) =>
+    name === builtIn.name && stored.get(old)?.builtIn === true && stored.get(old)?.enabled === false)
+  return { ...builtIn, enabled }
+}
 
 export function assertSkillName(name: string): void {
   if (!SKILL_NAME.test(name)) throw new Error('Skill name must be lowercase, hyphenated and 1–64 characters.')
@@ -69,19 +97,21 @@ export function parseSkillHeader(markdown: string): { name: string; description:
 }
 
 export async function getSkills(kv: KVNamespace, actor: string): Promise<SkillEntry[]> {
-  const entries = new Map(BUILTIN_SKILLS.map(skill => [skill.name, { ...skill }]))
+  const stored = new Map<string, SkillEntry>()
   let cursor: string | undefined
   // Bound the listing to avoid unexpectedly large reads / KV request costs.
   for (let page = 0; page < 5; page++) {
     const result = await kv.list({ prefix: prefix(actor), cursor, limit: 100 })
     for (const item of result.keys) {
-      const raw = await kv.get(item.name)
-      if (!raw) continue
-      let stored: SkillEntry
-      try { stored = JSON.parse(raw) as SkillEntry } catch { continue }
-      if (stored?.name && item.name === key(actor, stored.name)) entries.set(stored.name, stored)
+      const name = item.name.slice(prefix(actor).length)
+      const entry = parseStoredSkill(await kv.get(item.name), name)
+      if (entry && SKILL_NAME.test(name)) stored.set(name, entry)
     }
-    if (result.list_complete) return [...entries.values()].sort((a, b) => a.name.localeCompare(b.name))
+    if (result.list_complete) {
+      const entries = new Map([...stored].filter(([name]) => canonicalName(name) === name))
+      for (const builtIn of BUILTIN_SKILLS) entries.set(builtIn.name, withStoredSetting(builtIn, stored))
+      return [...entries.values()].sort((a, b) => a.name.localeCompare(b.name))
+    }
     cursor = result.cursor
     if (!cursor) break
   }
@@ -90,13 +120,21 @@ export async function getSkills(kv: KVNamespace, actor: string): Promise<SkillEn
 
 export async function getSkill(kv: KVNamespace, actor: string, name: string): Promise<SkillEntry> {
   assertSkillName(name)
-  const stored = await kv.get(key(actor, name))
+  name = canonicalName(name)
+  const stored = parseStoredSkill(await kv.get(key(actor, name)), name)
   const builtIn = BUILTIN_SKILLS.find(entry => entry.name === name)
-  if (!stored && builtIn) return { ...builtIn }
+  if (builtIn) {
+    const settings = new Map<string, SkillEntry>()
+    if (stored) settings.set(name, stored)
+    else for (const [old, target] of Object.entries(LEGACY_NAMES)) {
+      if (target !== name) continue
+      const legacy = parseStoredSkill(await kv.get(key(actor, old)), old)
+      if (legacy) settings.set(old, legacy)
+    }
+    return withStoredSetting(builtIn, settings)
+  }
   if (!stored) throw new Error(`Skill ${name} is not installed.`)
-  const skill = JSON.parse(stored) as SkillEntry
-  if (skill.name !== name || !skill.source) throw new Error('Invalid stored skill entry.')
-  return skill
+  return stored
 }
 
 export async function readSkillFile(octokit: Octokit, skill: SkillEntry, relativePath = 'SKILL.md'): Promise<string> {
@@ -134,7 +172,7 @@ export async function installSkillFromGitHub(
   }
   const markdown = await readSkillFile(octokit, provisional)
   const manifest = parseSkillHeader(markdown)
-  if (BUILTIN_SKILLS.some(skill => skill.name === manifest.name)) {
+  if (BUILTIN_SKILLS.some(skill => skill.name === canonicalName(manifest.name))) {
     throw new Error('This skill is built in; do not override it with an external repository.')
   }
   if (await kv.get(key(actor, manifest.name))) {
@@ -148,7 +186,7 @@ export async function installSkillFromGitHub(
 export async function setSkillEnabled(kv: KVNamespace, actor: string, name: string, enabled: boolean): Promise<SkillEntry> {
   const skill = await getSkill(kv, actor, name)
   const next = { ...skill, enabled }
-  await kv.put(key(actor, name), JSON.stringify(next))
+  await kv.put(key(actor, skill.name), JSON.stringify(next))
   return next
 }
 

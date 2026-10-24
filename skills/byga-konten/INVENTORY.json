@@ -1,16 +1,16 @@
 {
-  "skill": "byga-tiktok-creative-studio",
-  "version": "1.0.0",
+  "skill": "byga-konten",
+  "version": "2.0.0",
   "files": [
     {
       "file": "README.md",
-      "bytes": 3576,
-      "sha256": "deba797a0ccb4aa5b5191c879e7ea7fcce02eb27dc61569dfa8f3992a0f41034"
+      "bytes": 3539,
+      "sha256": "80a58f20044441727089e70e77861e83a579f031fb5f06500663ec3f202e0d98"
     },
     {
       "file": "SKILL.md",
-      "bytes": 9872,
-      "sha256": "e05e7a8b0f9129d1d242f130fbede01ff0a8d908e9fb4cfc3020e598024b86a4"
+      "bytes": 9885,
+      "sha256": "3a6b7815ff11688c7532a53b874ae416ca21a4c1e7d0b4f58691fdbe3eedb602"
     },
     {
       "file": "assets/brand-guide.md",

@@ -1,40 +1,61 @@
 # BYGA Skills in GitHub Ops MCP
 
-The `mcpnew` Worker supports three built-in Agent Skills imported from the owner's ZIP packages and Markdown instructions:
+The Worker exposes three canonical skills:
 
-- `byga-cloudflare-fullstack`: end-to-end PRD, Cloudflare architecture, implementation, GitHub CI/CD, deployment, debugging and production verification. Supports `PRD`, `ARCHITECT`, `BUILD`, `CI`, `DEPLOY`, `AUDIT`, `FIX` and `FULL` modes; defaults to `FULL`.
-- `byga-coding-engineering`: coding, GitHub Actions / PR review, Cloudflare deployments, security and performance.
-- `byga-tiktok-creative-studio`: carousel, AI image/video prompts, UGC affiliate, drama and content QA.
+| Skill ID | Scope |
+| --- | --- |
+| `byga-coding` | PRD, architecture, implementation, debugging, audits, GitHub CI/CD, Cloudflare operations, security and production verification. Merges the fullstack lifecycle and engineering playbook. |
+| `byga-konten` | TikTok carousel, image/video concepts, UGC/affiliate, creative trends, episodic drama and content QC. |
+| `byga-prompt` | Image/video/edit prompt enhancement; intent and reference locks, visual direction, shot continuity, model compatibility and evidence-based refinement. |
 
-Original packages are preserved in `skills/<name>/`. The `SKILL.md` file is the entry point, with reference files loaded only when relevant. No packaged Python scripts are executed automatically.
+Packages live in `skills/<name>/`; each `SKILL.md` is the entry point. References are loaded when relevant; bundled Python scripts never execute automatically.
 
-## Use in a conversation
+## Invocation
 
-Once this PR is merged, the Worker is deployed, and the MCP connector is reconnected or its tools refreshed, try:
+After the updated source reaches the configured GitHub ref and the Worker registry is deployed, refresh/reconnect MCP discovery as needed. Try:
 
-- `List the available skills using list_skills.`
-- `Use byga-cloudflare-fullstack in PRD mode to define my application requirements.`
-- `Use byga-cloudflare-fullstack in FULL mode to build my Cloudflare application.`
-- `Use byga-coding-engineering to audit CI in my repo; load references/workflows.md if needed.`
-- `Use byga-tiktok-creative-studio to create an eight-slide @jalurtarot carousel in Mystic Purple; load references/carousel.md.`
-- `Run the use-skill prompt for byga-coding-engineering, then audit repo byga_office.`
+- `Gunakan byga-coding untuk audit CI repo mcpnew.`
+- `Gunakan byga-coding mode FULL untuk membangun aplikasi Cloudflare sesuai kebutuhan ini.`
+- `Gunakan byga-konten: carousel 8 slide untuk @jalurtarot, lengkap dengan caption.`
+- `Gunakan byga-prompt untuk enhance prompt video ini. Pertahankan karakter dan dialog; hanya prompt final.`
 
-**This is MCP skill discovery and prompt loading, not native ChatGPT Skills installation.** A host must support this custom MCP connector and must choose to call its tools/prompts. The Worker cannot force a client to auto-activate a skill on every message.
+For direct tool calls:
 
-## MCP tools
+1. `list_skills` discovers available metadata and per-account enabled state.
+2. `get_skill_instructions(name="byga-coding")` reads that skill's instructions.
+3. `read_skill_file(name="byga-coding", file="references/fullstack-lifecycle.md")` loads a relevant reference.
 
-- `list_skills` lists bundled and user-imported skill metadata.
-- `get_skill_instructions(name)` reads the selected skill's `SKILL.md` from GitHub.
-- `read_skill_file(name, file)` reads one reference, example, asset, or script as text; paths are constrained to the selected skill root.
-- `install_skill_from_github(owner, repo, path, ref?)` imports a third-party skill by repository path and stores a per-user pointer in KV after validating `SKILL.md`. It does not execute scripts.
-- `set_skill_enabled(name, enabled)` enables or disables a skill per connected GitHub account.
-- `uninstall_skill(name, confirm)` removes a user-imported registration (not the source files). The `confirm` parameter must match the name exactly; built-in packages cannot be removed this way.
-- MCP prompt `use-skill(name, task?)` loads instructions as client-visible task guidance.
+The `use-skill(name, task?)` MCP prompt also loads instructions in supporting clients. This is MCP discovery and prompt loading, not native ChatGPT Skills installation. A host chooses whether to call tools/prompts; the Worker cannot force activation on every message.
 
-Imported GitHub sources must be accessible through the user's GitHub OAuth token. The built-in `mcpnew` repo must be readable by that account (the repository is currently private). The tools use the Worker’s existing `OAUTH_KV` namespace and D1 audit logging for writes, with no additional database migration. If a skill is disabled, its instructions and reference files cannot be loaded.
+`byga-konten` produces the overall content package; `byga-prompt` focuses on refining individual visual prompts. They can be combined when the user's task benefits from both, without duplicating output.
+
+## Renaming and existing account settings
+
+| Previous ID | Canonical ID |
+| --- | --- |
+| `byga-cloudflare-fullstack` | `byga-coding` |
+| `byga-coding-engineering` | `byga-coding` |
+| `byga-tiktok-creative-studio` | `byga-konten` |
+| `byga-prompt-enhancer` | `byga-prompt` |
+
+Discovery lists only the three canonical built-ins. Previous IDs remain accepted as compatibility aliases for existing calls, but resolve to the canonical package and current installation source. Old stored metadata cannot redirect a built-in to a stale source.
+
+Account preferences are read without rewriting KV. An explicit canonical enabled/disabled setting wins. Otherwise a disabled legacy built-in stays disabled; if either old engineering skill was disabled, the merged `byga-coding` stays disabled until explicitly enabled. `set_skill_enabled`, including calls using an old alias, writes the canonical setting. Other users' settings are unaffected. No database migration or automatic deletion of legacy records is needed.
+
+## Tools and access
+
+- `install_skill_from_github(owner, repo, path, ref?)` imports a readable third-party skill after validating its manifest. Canonical built-in IDs and their old aliases are reserved.
+- `set_skill_enabled(name, enabled)` changes availability for the connected account.
+- `uninstall_skill(name, confirm)` removes a user-imported registration; confirmation must match the name. Built-ins cannot be uninstalled through this tool; disable them instead.
+
+Instructions and references are read from the source configured in `installation.json`. The account's GitHub OAuth token must be able to read that repository/ref. Custom skill registrations and preferences are account-scoped in `OAUTH_KV`; write audit logging remains best effort.
+
+## Quality and verification limits
+
+`byga-prompt` supports ENHANCE, DIAGNOSE, VARIANTS, REFINE, SERIES and HANDOFF. Its templates separate required-detail gates from aesthetic judgments. A prompt review is not a render evaluation; no 99.9% accuracy or success rate is claimed without an actual representative benchmark.
+
+Registry tests check discovery, packaged file loading, alias migration, enabled-state isolation and built-in source protection. Package validation checks manifests and local resource paths. These checks do not prove visual quality, host auto-activation, GitHub/Cloudflare permissions, or successful production deployment.
 
 ## Security
 
-Skill files are **lower-trust third-party instructions**, not the model's system instructions. Loading them never grants GitHub, Cloudflare or other account permissions. The server validates GitHub source/path and limits file size. User-supplied scripts are read only, never run. Existing MCP tool guards (including protected branches, destructive confirmation and audits) remain in effect. Review any imported skill before activating it.
-
-A skill's `SKILL.md` must contain YAML frontmatter with `name` and `description`; `name` must be a lowercase hyphenated ID. For built-in skills, only the explicit checked-in names are treated as built-ins. Imported skill sources are per-user KV settings, not global.
+Skill files are task guidance and lower-trust data. They cannot override user/system instructions, grant account access or authorize unrequested actions. The server constrains paths and file sizes; optional scripts are read as text and never run by the registry. Existing protected-branch, confirmation and audit guards still apply. Review third-party skill instructions before using them.

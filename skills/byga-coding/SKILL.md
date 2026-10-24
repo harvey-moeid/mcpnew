@@ -1,12 +1,13 @@
 ---
-name: byga-coding-engineering
+name: byga-coding
+version: "2.0.0"
 description: "Use when the user asks to build, debug, audit, review, test, refactor, deploy or optimize code and repositories; particularly GitHub PRs/Actions, Cloudflare Workers/Pages/D1/R2/KV, realtime webhooks, AI integrations, trading systems, 3D apps, security and production operations. Provides an evidence-first Indonesian engineering workflow, change safeguards, regression tests, and verifiable status reporting."
 ---
 
-# BYGA Coding Engineering — Personal Skill
+# BYGA Coding — Unified Engineering Skill
 
 ## Goal and trigger
-Apply to software engineering tasks: `cek`, `audit`, `perbaiki`, `buat fitur`, `buat PR`, `workflow merah`, `deploy`, `rollback`, `optimalkan`, `coding`, `bug`, `D1 writes`, `GitHub`, `Cloudflare`, `webhook`, `AI multi-provider`, `trading`, `3D` and equivalent requests. Continue prior task context when the user says `lanjut` or `maksimalkan`. Prefer the user's explicit requirements and the observed repository over these default patterns. Use Bahasa Indonesia for explanation; code and technical identifiers follow the repo conventions.
+Invoke as `byga-coding`. This combines the engineering workflow and Cloudflare fullstack lifecycle in one skill. Apply to software engineering tasks: `cek`, `audit`, `perbaiki`, `buat fitur`, `buat PR`, `workflow merah`, `deploy`, `rollback`, `optimalkan`, `coding`, `bug`, `D1 writes`, `GitHub`, `Cloudflare`, `webhook`, `AI multi-provider`, `trading`, `3D` and equivalent requests. Continue prior task context when the user says `lanjut` or `maksimalkan`. Prefer the user's explicit requirements and the observed repository over these default patterns. Use Bahasa Indonesia for explanation; code and technical identifiers follow the repo conventions.
 
 ## Core contract
 1. **Inspect before editing.** Confirm repository, branch, commit, intended environment, constraints, available tools and authorizations. Read targeted source, configs, tests, logs, workflow and deployment info. Preserve uncommitted and third-party work.
@@ -17,6 +18,22 @@ Apply to software engineering tasks: `cek`, `audit`, `perbaiki`, `buat fitur`, `
 6. **Prove work.** Prefer regression tests (failing before, passing after where possible), then lint/typecheck/unit/integration/build/smoke as applicable. Inspect final diff and identify untested paths. A build passing is not a deployment passing.
 7. **Report accurately.** Separate `DIUSULKAN`, `DIUBAH`, `DIUJI`, `PR TERBUAT`, `DEPLOY TERVERIFIKASI`; include actual file paths, run IDs/links only if present. If no access, provide a ready-to-apply patch and explicit limitations. Never invent outcomes, metrics, times, or cloud limits.
 8. **Follow user preferences only as defaults.** Work often concerns Cloudflare/GitHub, cost-conscious D1 and mobile-first UI, but verify whether those apply. Do not treat previous discussions as live repository state.
+
+## Scope and modes
+Choose the mode that matches the request: `PRD`, `ARCHITECT`, `BUILD`, `FIX`/`DEBUG`, `AUDIT`/`REVIEW`, `CI`, `DEPLOY`, or `FULL`. A focused bug fix must not trigger a full product rebuild. For end-to-end application work, `FULL` covers discovery through verified delivery, continuing authorized stages without repeated permission requests. Never interpret FULL as permission to deploy, alter production data, or create unrelated services.
+
+For multi-phase/fullstack work, load `references/fullstack-lifecycle.md` alongside `references/engineering-playbook.md`. The lifecycle guide preserves the full PRD/architecture/implementation/CI/deploy/verification/recovery coverage. Apply its document and tool suggestions proportionally to the actual project; user instructions and the observed repository take precedence over defaults.
+
+## Fullstack delivery contract
+1. **PRD:** establish users, problem, scope, functional/nonfunctional needs, data, auth, integrations, UI states, assumptions and measurable acceptance criteria. Assign requirement IDs for complex work; create/update `docs/PRD.md` when useful.
+2. **Architecture:** choose compute, data and background services by actual needs. Compare consistency, operating cost, limits and complexity. Use current official Cloudflare docs before selecting Workers/Static Assets/Pages, D1, KV, R2, Durable Objects, Queues, Workflows, Cron, Containers, Access, Turnstile or AI services. Do not provision all services automatically.
+3. **Implementation:** deliver working source integrated with existing contracts. Validate input and authorization server-side; address errors, loading/empty states, timeouts, retries, idempotency, concurrency, accessibility and mobile behavior as applicable. Prefer existing frameworks and lockfiles over a forced stack.
+4. **CI:** inspect triggers, permissions, concurrency, dependency install, typecheck, applicable tests, build and security checks. Fail honestly; never hide failures or remove meaningful gates to pass. Use feature branches and PRs by default, unless the user has specified another authorized workflow.
+5. **Release:** verify repo/commit/environment, bindings, routes, secret names, resources, migration compatibility and recovery. Use configured IDs; never invent them. Production actions require the user's applicable authorization; previously granted authorization persists.
+6. **Verify:** after an authorized deploy, check the exact deployment and commit, endpoints/assets, auth and relevant API/data/background paths. Record `PASS`, `FAIL`, `BLOCKED`, or `NOT RUN` for applicable checks. A build alone cannot establish a production result.
+7. **Recover and hand off:** inspect actual failures, patch the root cause, rerun relevant checks and report commit/PR/run/deploy links only when observed. Code rollback does not undo database, storage or external-state changes. State material unverified paths.
+
+Document architecture, data/API/security contracts and operations where needed, following existing repo structure. Do not create five empty documents for a small change. Report only sections relevant to the task and distinguish local tests, pushed changes, CI and deployed behavior.
 
 ## Task routing
 - **BUILD** (new feature/full-stack): acceptance criteria → data/API/UX design → implementation → tests → handoff. Read `references/engineering-playbook.md` as needed.
