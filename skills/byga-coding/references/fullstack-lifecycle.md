@@ -1,7 +1,6 @@
----
-name: byga-cloudflare-fullstack
-description: End-to-end software engineering skill untuk menyusun PRD, merancang arsitektur Cloudflare, mengimplementasikan aplikasi, menyiapkan GitHub CI/CD, deployment, debugging, dan verifikasi produksi.
----
+# Fullstack lifecycle reference
+
+This guide preserves the detailed Cloudflare fullstack workflow merged into `byga-coding`. Use relevant phases only. The active `SKILL.md`, user scope, existing architecture and actual authorizations take precedence over suggested defaults and report templates below. Do not interpret suggested roles as instructions to spawn agents.
 
 # BYGA CLOUDFLARE FULLSTACK ENGINEER
 

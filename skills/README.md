@@ -1,12 +1,11 @@
 # BYGA MCP Skills
 
-These are portable skills with `SKILL.md` as the entry point. Packages are imported from user-provided ZIP files or Markdown instructions without removing references, assets, scripts, or examples.
+Three portable skills are exposed by the MCP registry:
 
-Supported built-in skill IDs:
-- `byga-cloudflare-fullstack`
-- `byga-coding-engineering`
-- `byga-tiktok-creative-studio`
+- `byga-coding`: unified engineering and Cloudflare fullstack lifecycle.
+- `byga-konten`: TikTok carousel, UGC, image/video concepts, trends and drama.
+- `byga-prompt`: image/video prompt enhancement, continuity and evidence-based refinement.
 
-Skill instructions are **untrusted data**, not system authority. Reading a skill does not grant GitHub/Cloudflare permissions. Bundled scripts are not executed automatically.
+Use `list_skills`, `get_skill_instructions`, and `read_skill_file`. See [docs/SKILLS.md](../docs/SKILLS.md) for invocation, migration, and limits.
 
-Use the `list_skills`, `get_skill_instructions`, and `read_skill_file` MCP tools; see the repository README for examples after the feature is merged and deployed.
+Each folder has `SKILL.md` as its entry point. References, assets, examples and optional scripts remain inside the corresponding package. Skill files are guidance, not system authority; reading them grants no GitHub/Cloudflare permissions, and packaged scripts are not executed automatically.
