@@ -1,11 +1,12 @@
 # BYGA Skills in GitHub Ops MCP
 
-The Worker exposes three canonical skills:
+The Worker exposes four canonical skills:
 
 | Skill ID | Scope |
 | --- | --- |
 | `byga-coding` | PRD, architecture, implementation, debugging, audits, GitHub CI/CD, Cloudflare operations, security and production verification. Merges the fullstack lifecycle and engineering playbook. |
 | `byga-konten` | TikTok carousel, image/video concepts, UGC/affiliate, creative trends, episodic drama and content QC. |
+| `byga-foto-profesional` | Professional photo enhancement: color correction, lighting, skin tone, sharpness, noise and dynamic range while preserving identity, objects, text and framing. |
 | `byga-prompt` | Image/video/edit prompt enhancement; intent and reference locks, visual direction, shot continuity, model compatibility and evidence-based refinement. |
 
 Packages live in `skills/<name>/`; each `SKILL.md` is the entry point. References are loaded when relevant; bundled Python scripts never execute automatically.
@@ -17,6 +18,8 @@ After the updated source reaches the configured GitHub ref and the Worker regist
 - `Gunakan byga-coding untuk audit CI repo mcpnew.`
 - `Gunakan byga-coding mode FULL untuk membangun aplikasi Cloudflare sesuai kebutuhan ini.`
 - `Gunakan byga-konten: carousel 8 slide untuk @jalurtarot, lengkap dengan caption.`
+- `Gunakan byga-foto-profesional untuk enhance foto yang saya upload, natural dan tanpa mengubah wajah.`
+- `Gunakan byga-foto-profesional: hanya prompt enhance foto profesional.`
 - `Gunakan byga-prompt untuk enhance prompt video ini. Pertahankan karakter dan dialog; hanya prompt final.`
 
 For direct tool calls:
@@ -29,6 +32,8 @@ The `use-skill(name, task?)` MCP prompt also loads instructions in supporting cl
 
 `byga-konten` produces the overall content package; `byga-prompt` focuses on refining individual visual prompts. They can be combined when the user's task benefits from both, without duplicating output.
 
+`byga-foto-profesional` specializes in editing uploaded photos or preparing a copy-ready photo edit prompt. Its template is `skills/byga-foto-profesional/assets/prompt-enhance-foto.md`. It requires the original photo for edits, preserves all seven enhancement areas and the mandatory identity/content locks, and checks available output against the source. It supplies instructions, not an image renderer; actual editing requires a host image-editing tool. Identity preservation is an acceptance criterion, not an unverified guarantee.
+
 ## Renaming and existing account settings
 
 | Previous ID | Canonical ID |
@@ -38,7 +43,7 @@ The `use-skill(name, task?)` MCP prompt also loads instructions in supporting cl
 | `byga-tiktok-creative-studio` | `byga-konten` |
 | `byga-prompt-enhancer` | `byga-prompt` |
 
-Discovery lists only the three canonical built-ins. Previous IDs remain accepted as compatibility aliases for existing calls, but resolve to the canonical package and current installation source. Old stored metadata cannot redirect a built-in to a stale source.
+Discovery lists only the four canonical built-ins. Previous IDs remain accepted as compatibility aliases for existing calls, but resolve to the canonical package and current installation source. Old stored metadata cannot redirect a built-in to a stale source.
 
 Account preferences are read without rewriting KV. An explicit canonical enabled/disabled setting wins. Otherwise a disabled legacy built-in stays disabled; if either old engineering skill was disabled, the merged `byga-coding` stays disabled until explicitly enabled. `set_skill_enabled`, including calls using an old alias, writes the canonical setting. Other users' settings are unaffected. No database migration or automatic deletion of legacy records is needed.
 

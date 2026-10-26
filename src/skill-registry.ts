@@ -19,6 +19,12 @@ export type SkillEntry = {
 
 export const BUILTIN_SKILLS: SkillEntry[] = [
   {
+    name: 'byga-foto-profesional',
+    description: 'Enhance uploaded photos with natural professional color correction, balanced lighting, realistic skin tones, subtle detail and noise reduction while preserving identity, objects, text, framing and composition.',
+    version: '1.0.0', builtIn: true, enabled: true,
+    source: { ...skillSource, path: 'skills/byga-foto-profesional' },
+  },
+  {
     name: 'byga-prompt',
     description: 'Enhance image and video prompts with intent preservation, reference and continuity locks, model-aware visual direction, and evidence-based evaluation and refinement.',
     version: '2.0.0', builtIn: true, enabled: true,
