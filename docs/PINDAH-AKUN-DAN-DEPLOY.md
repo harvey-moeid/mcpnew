@@ -138,7 +138,7 @@ Lanjutkan pemeriksaan manual:
 
 1. Buka `publicOrigin`, login melalui GitHub akun yang diizinkan, dan pastikan callback kembali ke dashboard.
 2. Di aplikasi AI, tambahkan/refresh connector MCP dengan URL `publicOrigin` + `/mcp`. Login dan setujui koneksi baru.
-3. Jalankan `list_skills`; ketiga skill BYGA harus tampil.
+3. Jalankan `list_skills`; keempat skill BYGA harus tampil.
 4. Jalankan `get_skill_instructions` untuk `byga-coding`; sumbernya harus owner/repo BARU.
 5. Baca satu file repo yang memang dimiliki akun baru. Bila perlu uji tulis, gunakan branch percobaan di repo percobaan.
 6. Periksa audit setelah tindakan tulis. Audit masih best-effort; kegagalan audit tidak membatalkan operasi yang sudah terjadi.

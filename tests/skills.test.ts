@@ -25,7 +25,7 @@ const mockGitHub = {
 test('all BYGA built-in skills are discoverable', async () => {
   const kv = mockKV()
   const entries = await getSkills(kv as any, 'actor')
-  assert.deepEqual(entries.map(x => x.name), ['byga-coding', 'byga-konten', 'byga-prompt'])
+  assert.deepEqual(entries.map(x => x.name), ['byga-coding', 'byga-foto-profesional', 'byga-konten', 'byga-prompt'])
   assert.deepEqual(entries.map(x => x.name), BUILTIN_SKILLS.map(x => x.name).sort())
   assert.equal((await getSkill(kv as any, 'actor', 'byga-coding')).enabled, true)
 })
@@ -87,7 +87,7 @@ test('legacy IDs resolve to canonical sources and retain disabled settings witho
     assert.equal(skill.source.repo, installation.githubRepo)
     assert.equal(skill.source.path, `skills/${canonical}`)
     const entries = await getSkills(kv as any, 'actor')
-    assert.deepEqual(entries.map(x => x.name), ['byga-coding', 'byga-konten', 'byga-prompt'])
+    assert.deepEqual(entries.map(x => x.name), ['byga-coding', 'byga-foto-profesional', 'byga-konten', 'byga-prompt'])
     assert.equal(entries.find(x => x.name === canonical)?.enabled, false)
     assert.equal((await getSkill(kv as any, 'other-user', canonical)).enabled, true)
     await setSkillEnabled(kv as any, 'actor', old, true)
