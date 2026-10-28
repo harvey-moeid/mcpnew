@@ -1,7 +1,9 @@
 # BYGA MCP Skills
 
-Three portable skills are exposed by the MCP registry:
+Five portable skills are exposed by the MCP registry:
 
+- `byga-android`: Android PRD, implementation, stack recommendation and test APK delivery via GitHub Actions/Releases.
+- `byga-foto-profesional`: natural professional photo enhancement while preserving identity and content.
 - `byga-coding`: unified engineering and Cloudflare fullstack lifecycle.
 - `byga-konten`: TikTok carousel, UGC, image/video concepts, trends and drama.
 - `byga-prompt`: image/video prompt enhancement, continuity and evidence-based refinement.

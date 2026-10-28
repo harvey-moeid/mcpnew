@@ -1,0 +1,88 @@
+# TEMPLATE: fill every __PLACEHOLDER__ before using in the APPLICATION repository.
+# Resolve official action commit SHAs and compatible toolchain versions at implementation time.
+name: Android test APK
+on:
+  pull_request:
+    branches: ["__DEFAULT_BRANCH__"]
+  push:
+    branches: ["__DEFAULT_BRANCH__"]
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish this debug APK as a GitHub prerelease (anyone with repository access may download)"
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: android-debug-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@__CHECKOUT_SHA__
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@__SETUP_JAVA_SHA__
+        with:
+          distribution: temurin
+          java-version: "__JAVA_VERSION__"
+      - uses: gradle/actions/setup-gradle@__SETUP_GRADLE_SHA__
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+      - name: Lint, unit tests and build debug APK
+        shell: bash
+        run: |
+          test -f gradle/wrapper/gradle-wrapper.jar
+          chmod +x gradlew
+          ./gradlew --no-daemon lintDebug testDebugUnitTest assembleDebug
+      - name: Collect one universal debug APK
+        shell: bash
+        run: |
+          shopt -s nullglob
+          apks=(app/build/outputs/apk/debug/*.apk)
+          if [ "${#apks[@]}" -ne 1 ]; then
+            echo "Expected one universal debug APK. Configure the exact variant/ABI output for this project."
+            exit 1
+          fi
+          mkdir -p dist
+          cp "${apks[0]}" dist/app-debug.apk
+          test -s dist/app-debug.apk
+          cd dist
+          sha256sum app-debug.apk > SHA256SUMS.txt
+      - name: Upload installable APK and checksum
+        uses: actions/upload-artifact@__UPLOAD_ARTIFACT_SHA__
+        with:
+          name: android-debug-${{ github.sha }}-${{ github.run_attempt }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+  release:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_release && github.ref == 'refs/heads/__DEFAULT_BRANCH__'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download APK from this workflow run
+        uses: actions/download-artifact@__DOWNLOAD_ARTIFACT_SHA__
+        with:
+          name: android-debug-${{ github.sha }}-${{ github.run_attempt }}
+          path: dist
+      - name: Check APK checksum before publication
+        working-directory: dist
+        run: sha256sum --check SHA256SUMS.txt
+      - name: Publish test APK as a prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_TAG: apk-debug-${{ github.run_number }}-${{ github.run_attempt }}
+        shell: bash
+        run: |
+          gh release create "$RELEASE_TAG" dist/app-debug.apk dist/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --target "$RELEASE_SHA" --prerelease \
+            --title "Android test APK $RELEASE_TAG" \
+            --notes "Debug APK for testing. Not a production release. A new runner may use a different debug signing key. See the project README before replacing an existing installation."
