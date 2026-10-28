@@ -1,4 +1,4 @@
-# BYGA Skills in GitHub Ops MCP
+# BYGA Skills in BYGA MCP MCP
 
 The Worker exposes five canonical skills:
 
