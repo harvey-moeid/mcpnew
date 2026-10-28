@@ -10,6 +10,7 @@ on:
       - 'package-lock.json'
       - 'installation.json'
       - 'scripts/**'
+      - 'migrations/**'
       - '.github/workflows/deploy.yml'
 
 permissions:
@@ -46,6 +47,13 @@ jobs:
 
       - name: Check installation configuration
         run: npm run check:installation
+
+      - name: Apply D1 migrations before deploying file management
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 migrations apply AUDIT_DB --remote
 
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v4

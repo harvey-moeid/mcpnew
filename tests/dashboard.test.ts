@@ -21,7 +21,7 @@ function environment() {
     },
     AUDIT_DB: { prepare(sql: string) {
       assert.ok(sql.includes('WHERE actor = ?'))
-      return { bind(...args: unknown[]) { auditBindings.push(args); return { async all() { return { results: [] } } } } }
+      return { bind(...args: unknown[]) { auditBindings.push(args); return { async first() { return null }, async all() { return { results: [] } } } } }
     } },
     OAUTH_PROVIDER: {
       async parseAuthRequest() { return authRequest },
@@ -244,4 +244,179 @@ test('unconfigured deployment has an honest empty state', async () => {
   const { env } = environment()
   const response = await request(env, '/dashboard/api/deployments', { headers: { Cookie: await authenticated(env) } })
   assert.deepEqual(await response.json(), { configured: false, deployments: [] })
+})
+
+function fileStorage(env: Env) {
+  const objects = new Map<string, { data: Uint8Array; metadata: Record<string, string> }>()
+  const gets: string[] = []
+  let listOptions: R2ListOptions | undefined
+  const object = (key: string, stored: { data: Uint8Array; metadata: Record<string, string> }) => ({
+    key, size: stored.data.length, uploaded: new Date('2026-10-28T00:00:00Z'),
+    customMetadata: stored.metadata, httpMetadata: { contentType: 'application/octet-stream' },
+  })
+  env.FILES_BUCKET = {
+    async put(key: string, body: ReadableStream | null, options: R2PutOptions) {
+      if (options.onlyIf && objects.has(key)) return null
+      const data = new Uint8Array(await new Response(body).arrayBuffer())
+      const stored = { data, metadata: options.customMetadata ?? {} }
+      objects.set(key, stored)
+      return object(key, stored)
+    },
+    async get(key: string) {
+      gets.push(key)
+      const stored = objects.get(key)
+      return stored ? { ...object(key, stored), body: new Blob([stored.data]).stream() } : null
+    },
+    async list(options: R2ListOptions) {
+      listOptions = options
+      return { objects: Array.from(objects.entries()).filter(([key]) => key.startsWith(options.prefix!))
+        .map(([key, value]) => object(key, value)), truncated: true, cursor: 'opaque-next-page' }
+    },
+  } as unknown as R2Bucket
+  return { objects, gets, options: () => listOptions }
+}
+
+test('R2 files require login, reject cross-origin uploads, and report absent storage', async () => {
+  const { env } = environment()
+  const path = '/dashboard/api/files'
+  assert.equal((await request(env, path)).status, 401)
+  assert.equal((await request(env, path, { method: 'POST' })).status, 401)
+  assert.equal((await request(env, path + '/download?key=test')).status, 401)
+  const Cookie = await authenticated(env)
+  const listing = await request(env, path, { headers: { Cookie } })
+  assert.equal((await listing.json()).configured, false)
+  assert.equal((await request(env, path, { method: 'POST', headers: { Cookie, Origin: 'https://evil.example' } })).status, 403)
+  assert.equal((await request(env, path, { method: 'POST', headers: { Cookie, Origin: origin } })).status, 503)
+})
+
+test('R2 round trip preserves binary files, Unicode names, duplicate names and private pagination', async () => {
+  const { env } = environment()
+  const storage = fileStorage(env)
+  const Cookie = await authenticated(env)
+  const name = 'laporan 日本 🐱.zip'
+  const bytes = new Uint8Array([0, 255, 128, 13, 10, 1])
+  for (let i = 0; i < 2; i++) {
+    const response = await request(env, '/dashboard/api/files?name=' + encodeURIComponent(name), {
+      method: 'POST', headers: { Cookie, Origin: origin, 'Content-Length': String(bytes.length) }, body: bytes,
+    })
+    assert.equal(response.status, 201)
+    assert.equal((await response.json()).file.name, name)
+  }
+  assert.equal(storage.objects.size, 2)
+  storage.objects.set('dashboard-files/another-user/secret', { data: bytes, metadata: { filename: 'secret' } })
+  const listing = await request(env, '/dashboard/api/files?cursor=previous', { headers: { Cookie } })
+  const data = await listing.json()
+  assert.equal(data.files.length, 2)
+  assert.equal(data.cursor, 'opaque-next-page')
+  assert.equal(storage.options()?.prefix, 'dashboard-files/harvey-moeid/')
+  assert.equal(storage.options()?.cursor, 'previous')
+  const download = await request(env, '/dashboard/api/files/download?key=' + encodeURIComponent(data.files[0].key), { headers: { Cookie } })
+  assert.equal(download.status, 200)
+  assert.deepEqual(new Uint8Array(await download.arrayBuffer()), bytes)
+  assert.match(download.headers.get('Content-Disposition')!, /attachment;.*filename\*=UTF-8''/)
+  assert.ok(download.headers.get('Content-Disposition')!.includes(encodeURIComponent(name)))
+  assert.equal(download.headers.get('Content-Type'), 'application/octet-stream')
+  assert.equal(download.headers.get('Cache-Control'), 'no-store')
+  assert.equal(download.headers.get('X-Content-Type-Options'), 'nosniff')
+  assert.ok(!JSON.stringify(data).includes('private-test-token'))
+})
+
+test('R2 rejects another user key before storage access, including prefix tricks', async () => {
+  const { env } = environment()
+  const storage = fileStorage(env)
+  const Cookie = await authenticated(env)
+  for (const key of ['dashboard-files/another-user/secret', 'dashboard-files/harvey-moeid-evil/file', 'unrelated/file']) {
+    const response = await request(env, '/dashboard/api/files/download?key=' + encodeURIComponent(key), { headers: { Cookie } })
+    assert.equal(response.status, 404)
+  }
+  assert.equal(storage.gets.length, 0)
+  assert.equal((await request(env, '/dashboard/api/files/download?key=dashboard-files/harvey-moeid/missing', { headers: { Cookie } })).status, 404)
+})
+
+test('R2 validates file names and size before writes; empty files are supported', async () => {
+  const { env } = environment()
+  const storage = fileStorage(env)
+  const Cookie = await authenticated(env)
+  const upload = (name: string, length?: string) => request(env, '/dashboard/api/files?name=' + encodeURIComponent(name), {
+    method: 'POST', headers: { Cookie, Origin: origin, ...(length === undefined ? {} : { 'Content-Length': length }) },
+  })
+  for (const name of ['', ' ', '../secret', 'folder/file', 'back\\slash', 'bad\r\nname', '..', '🐱'.repeat(65)]) {
+    assert.equal((await upload(name, '0')).status, 400)
+  }
+  assert.equal((await upload('a')).status, 411)
+  assert.equal((await upload('a', 'invalid')).status, 411)
+  assert.equal((await upload('a', String(25 * 1024 * 1024 + 1))).status, 413)
+  assert.equal(storage.objects.size, 0)
+  assert.equal((await upload('empty.txt', '0')).status, 201)
+  assert.equal(Array.from(storage.objects.values())[0].data.length, 0)
+})
+
+test('R2 outages return a safe error rather than exposing storage details', async () => {
+  const { env } = environment()
+  env.FILES_BUCKET = { async list() { throw new Error('sensitive internal bucket detail') } } as unknown as R2Bucket
+  const response = await request(env, '/dashboard/api/files', { headers: { Cookie: await authenticated(env) } })
+  assert.equal(response.status, 503)
+  assert.ok(!(await response.text()).includes('sensitive internal'))
+})
+
+
+async function testUploadTicket(env: Env, values: Map<string, string>, overrides: Record<string, unknown> = {}) {
+  const token = 'a'.repeat(64)
+  const key = 'file-upload:' + await digest(token)
+  const ticket = { login: 'harvey-moeid', key: 'dashboard-files/harvey-moeid/uuid/report.zip', name: 'report.zip', size: 4, expiresAt: Date.now() + 600000, ...overrides }
+  values.set(key, JSON.stringify(ticket))
+  return { token, ticket, key }
+}
+
+test('workspace ticket upload stores binary file visible in dashboard; download still requires owner login', async () => {
+  const { env, values } = environment()
+  const storage = fileStorage(env)
+  const { token, ticket, key } = await testUploadTicket(env, values)
+  const body = new Uint8Array([0, 255, 128, 1])
+  const response = await request(env, '/file-transfers/upload', { method: 'POST',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Length': '4' }, body })
+  assert.equal(response.status, 201)
+  const data = await response.json()
+  assert.equal(data.requiresLogin, true)
+  assert.equal(data.file.key, ticket.key)
+  assert.deepEqual(storage.objects.get(ticket.key)?.data, body)
+  assert.ok(!values.has(key))
+  const Cookie = await authenticated(env)
+  const listing = await request(env, '/dashboard/api/files', { headers: { Cookie } })
+  assert.equal((await listing.json()).files[0].key, ticket.key)
+  const downloadPath = '/dashboard/api/files/download?key=' + encodeURIComponent(ticket.key)
+  assert.equal((await request(env, downloadPath)).status, 401)
+  assert.equal((await request(env, downloadPath, { headers: { Authorization: 'Bearer ' + token } })).status, 401)
+  assert.equal((await request(env, downloadPath, { headers: { Cookie } })).status, 200)
+  assert.equal((await request(env, '/file-transfers/upload', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Length': '4' }, body })).status, 401)
+  // Simulate a stale KV replica replaying the ticket after completion: conditional R2 put must reject it.
+  values.set(key, JSON.stringify(ticket))
+  assert.equal((await request(env, '/file-transfers/upload', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Length': '4' }, body })).status, 409)
+})
+
+test('workspace upload rejects missing, expired, revoked or wrong-size tickets before storage writes', async () => {
+  const { env, values } = environment()
+  const storage = fileStorage(env)
+  const send = (token?: string, size = '4') => request(env, '/file-transfers/upload', { method: 'POST', headers: { ...(token ? { Authorization: 'Bearer ' + token } : {}), 'Content-Length': size } })
+  assert.equal((await send()).status, 401)
+  assert.equal((await send('b'.repeat(64))).status, 401)
+  let issued = await testUploadTicket(env, values, { expiresAt: Date.now() - 1 })
+  assert.equal((await send(issued.token)).status, 401)
+  issued = await testUploadTicket(env, values)
+  assert.equal((await send(issued.token, '5')).status, 400)
+  env.GITHUB_ALLOWED_USERS = 'another-user'
+  assert.equal((await send(issued.token)).status, 401)
+  assert.equal(storage.objects.size, 0)
+})
+
+test('another logged-in dashboard account cannot download the owner file', async () => {
+  const { env } = environment()
+  const storage = fileStorage(env)
+  const key = 'dashboard-files/harvey-moeid/uuid/private.zip'
+  storage.objects.set(key, { data: new Uint8Array([1]), metadata: { filename: 'private.zip' } })
+  env.GITHUB_ALLOWED_USERS = 'harvey-moeid,another-user'
+  const Cookie = cookieHeader(await createSession(env, { login: 'another-user', name: 'Other', avatarUrl: '', accessToken: 'other-test-token' }))
+  const response = await request(env, '/dashboard/api/files/download?key=' + encodeURIComponent(key), { headers: { Cookie } })
+  assert.equal(response.status, 404)
+  assert.equal(storage.gets.length, 0)
 })

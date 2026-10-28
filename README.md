@@ -25,6 +25,7 @@ yang sama dengan konektor MCP; tidak diperlukan PAT atau callback tambahan.
 
 - **Ringkasan:** jumlah repo yang sudah dimuat, hingga 30 PR terbuka terbaru pada
   repo pilihan, pemeriksaan gagal, Actions, deployment Worker, dan audit terbaru.
+- **File R2:** upload beberapa file (maksimal 25 MiB per file), daftar file per akun, dan download melalui sesi dashboard. Tool MCP `upload_file`, `create_file_upload`, `list_files`, dan `get_file_download` mendukung pengiriman hasil kerja workspace dengan link download yang tetap memerlukan login pemilik. Bucket aktif: `mcpnew`. Lihat [panduan file R2](docs/FILE-R2-DASHBOARD.md).
 - **Repositori:** pencarian, filter publik/privat/arsip, pagination, dan pemilihan repo.
 - **Pull requests:** gabungan GitHub check runs dan commit statuses pada head PR;
   filter status, draft, dan tautan review langsung ke GitHub. Status tidak tersedia
@@ -35,8 +36,7 @@ yang sama dengan konektor MCP; tidak diperlukan PAT atau callback tambahan.
 - **Koneksi & akses:** sesi, salin URL MCP, konfigurasi Cloudflare, dan status direct push.
 - Tema gelap/terang, navigasi mobile, dan shortcut `/` untuk mencari repo.
 
-Data privat hanya tersedia setelah login. Dashboard tidak menyediakan tombol merge,
-deploy, atau hapus: tindakan tersebut dibuka di GitHub atau dilakukan lewat tool MCP.
+File privat memerlukan login pemilik. Label proyek, tempat sampah 7 hari, penggunaan penyimpanan, dan link berbagi sementara tersedia di menu File R2. Link berbagi hanya dibuat atas pilihan pemilik dan bisa dicabut. Dashboard tetap membuka operasi merge/deploy GitHub melalui GitHub atau tool MCP.
 Tidak ada token yang dikirim ke JavaScript dashboard atau disimpan di localStorage.
 
 ### Autentikasi dashboard

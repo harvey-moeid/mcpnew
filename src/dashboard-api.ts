@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { dashboardFiles } from './dashboard-files'
 import { readSession, destroySession, sameOrigin, type DashboardSession } from './dashboard-auth'
 import { getWorkerDeployments, CloudflareApiError } from './cloudflare'
 import installation from '../installation.json' with { type: 'json' }
@@ -41,6 +42,8 @@ dashboardApi.onError((error, c) => {
   if (error instanceof CloudflareApiError) return c.json({ error: 'Koneksi Cloudflare gagal. Periksa izin koneksi atau coba lagi nanti.' }, 502)
   return c.json({ error: 'Data belum dapat dimuat. Coba lagi nanti.' }, 503)
 })
+
+dashboardApi.route('/files', dashboardFiles)
 
 dashboardApi.get('/session', c => {
   const { login, name, avatarUrl, expiresAt } = c.get('session')

@@ -54,3 +54,12 @@ custom_domain = true
 
 # Last manual deploy trigger: 2026-09-02 (deps update + mojibake fix)
 # v2.0.0: updated all deps to latest (agents 0.22, MCP SDK 1.30, zod 4, wrangler 4.128)
+
+# File dashboard privat; hanya prefix dashboard-files/<login>/ yang diakses.
+[[r2_buckets]]
+binding = "FILES_BUCKET"
+bucket_name = "mcpnew" # GANTI_INSTALASI: nama bucket file Anda
+
+# Purge expired trash every hour (UTC).
+[triggers]
+crons = ["17 * * * *"]

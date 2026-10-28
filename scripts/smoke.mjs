@@ -12,6 +12,8 @@ export async function runSmoke(origin, request = fetch, logger = console) {
     ['/.well-known/oauth-authorization-server', 200, 'application/json'],
     ['/mcp', 401, null],
     ['/dashboard/api/session', 401, 'application/json'],
+    ['/dashboard/api/files', 401, 'application/json'],
+    ['/shared-files/invalid', 404, null],
   ]
   let failures = 0
   for (const [path, expectedStatus, type] of probes) {

@@ -2,6 +2,9 @@ import { Hono } from 'hono'
 import type { AuthRequest } from '@cloudflare/workers-oauth-provider'
 import { clientIdAlreadyApproved, parseRedirectApproval, renderApprovalDialog } from './utils'
 import { beginTransaction, consumeTransaction, createSession, isAllowedUser, sameOrigin } from './dashboard-auth'
+import { sharedFileKey } from './file-management'
+import { fileDownload } from './files'
+import { fileTransfers } from './file-transfers'
 import { dashboardApi } from './dashboard-api'
 import { dashboardHtml, dashboardScript, dashboardStyles } from './dashboard-page'
 
@@ -13,7 +16,7 @@ app.use('*', async (c, next) => {
   c.header('X-Content-Type-Options', 'nosniff')
   // Form POSTs need their same-origin Origin header for the approval CSRF check.
   // no-referrer can serialize that header as "null" for navigation requests.
-  c.header('Referrer-Policy', 'same-origin')
+  c.header('Referrer-Policy', c.req.path.startsWith('/shared-files/') ? 'no-referrer' : 'same-origin')
   c.header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https://avatars.githubusercontent.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'")
 })
 
@@ -22,6 +25,17 @@ app.get('/dashboard', c => c.html(dashboardHtml))
 app.get('/dashboard/app.js', c => c.body(dashboardScript, 200, { 'Content-Type': 'text/javascript; charset=utf-8' }))
 app.get('/dashboard/style.css', c => c.body(dashboardStyles, 200, { 'Content-Type': 'text/css; charset=utf-8' }))
 app.route('/dashboard/api', dashboardApi)
+app.route('/file-transfers', fileTransfers)
+app.get('/shared-files/:token', async c => {
+  c.header('X-Robots-Tag', 'noindex, nofollow, noarchive')
+  try {
+    const key = await sharedFileKey(c.env, c.req.param('token'))
+    if (!key || !c.env.FILES_BUCKET) return c.text('Link tidak tersedia atau sudah kedaluwarsa.', 404)
+    const object = await c.env.FILES_BUCKET.get(key)
+    if (!object) return c.text('Link tidak tersedia atau sudah kedaluwarsa.', 404)
+    return fileDownload(object)
+  } catch { return c.text('File sementara tidak dapat diakses.', 503) }
+})
 app.get('/dashboard/login', async c => {
   if (!c.env.GITHUB_CLIENT_ID || !c.env.GITHUB_CLIENT_SECRET || !c.env.COOKIE_ENCRYPTION_KEY || !c.env.GITHUB_ALLOWED_USERS?.trim()) {
     return c.text('Dashboard belum dikonfigurasi. Hubungi pengelola layanan.', 503)
