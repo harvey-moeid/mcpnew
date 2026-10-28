@@ -12,6 +12,14 @@ export async function readFileState(env: Env, login: string, key: string) {
   return env.AUDIT_DB.prepare('SELECT * FROM dashboard_file_state WHERE actor = ? AND key = ?')
     .bind(login.toLowerCase(), key).first<FileState>()
 }
+// Check the same metadata used by downloads before creating bytes or upload tickets.
+// Do not cache readiness: a later database outage must also fail closed.
+export async function assertFileUploadReady(env: Env, login: string, key: string) {
+  let state: FileState | null
+  try { state = await readFileState(env, login, key) }
+  catch { throw new Error('File management is unavailable. Check D1 migrations and database availability before uploading.') }
+  if (state?.deleted_at != null || state?.purging) throw new FileActionError('This file has been removed.', 409)
+}
 export async function statesFor(env: Env, login: string, keys: string[]) {
   if (!keys.length) return new Map<string, FileState>()
   const rows = await env.AUDIT_DB.prepare(`SELECT * FROM dashboard_file_state WHERE actor = ? AND key IN (${keys.map(() => '?').join(',')})`)

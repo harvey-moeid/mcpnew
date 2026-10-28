@@ -209,7 +209,7 @@ Setelah deploy, kamu akan dapat URL seperti `https://mcpnew.muidsoft.com`.
 | `scaffold_repository` | Buat repo baru + isi file awal dalam satu commit |
 | `trigger_workflow` | Jalankan GitHub Actions workflow manual (`workflow_dispatch`) |
 | `deploy_and_push` | Push file + langsung trigger deploy workflow dalam satu panggilan |
-| `put_r2_object` | **(R2)** Tulis/timpa isi satu object R2 |
+| `put_r2_object` | **(R2)** Buat object teks baru; overwrite perlu `overwrite=true` dan `confirm=bucket:key` |
 | `rerun_workflow` | **(v1.7.0)** Re-run workflow run yang gagal tanpa commit baru (support `failed_jobs_only`) |
 
 **Destructive** (`destructiveHint: true`, Claude akan lebih hati-hati/minta konfirmasi):

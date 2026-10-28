@@ -194,3 +194,80 @@ test('MCP file listing uses the same per-account prefix and cursor as the dashbo
   assert.equal(data.cursor, 'next')
   assert.equal(data.files[0].requiresLogin, true)
 })
+
+test('all administrative R2 tools recheck revoked or empty allowlists in an established session', async t => {
+  const fetch = t.mock.method(globalThis, 'fetch', async () => new Response(null, { status: 200 }))
+  const { tools, env } = await setup()
+  const calls = [
+    ['list_r2_objects', { bucket: 'files', limit: 50 }],
+    ['get_r2_object', { bucket: 'files', key: 'report.txt' }],
+    ['put_r2_object', { bucket: 'files', key: 'report.txt', content: 'x' }],
+    ['delete_r2_object', { bucket: 'files', key: 'report.txt', confirm: 'files:report.txt' }],
+    ['r2_bucket_create', { name: 'files' }],
+    ['r2_bucket_list', { per_page: 100 }],
+    ['r2_bucket_delete', { name: 'files', confirm: 'files' }],
+  ] as const
+  for (const allowlist of ['another-user', '']) {
+    env.GITHUB_ALLOWED_USERS = allowlist
+    for (const [name, args] of calls) {
+      const result = await tools.get(name).handler(args)
+      assert.equal(result.isError, true, name)
+      assert.match(result.content[0].text, /R2 access denied/, name)
+    }
+  }
+  assert.equal(fetch.mock.callCount(), 0)
+  env.GITHUB_ALLOWED_USERS = ' ACTOR '
+  assert.ok(!(await tools.get('put_r2_object').handler({ bucket: 'files', key: 'report.txt', content: 'x' })).isError)
+  assert.equal(fetch.mock.callCount(), 1)
+})
+
+test('R2 text creation preserves existing bytes and overwrite requires explicit target confirmation', async t => {
+  let stored: string | undefined
+  const fetch = t.mock.method(globalThis, 'fetch', async (_url: string, options: RequestInit) => {
+    if (new Headers(options.headers).get('If-None-Match') === '*' && stored !== undefined) return new Response(null, { status: 412 })
+    stored = options.body as string
+    return new Response(null, { status: 200 })
+  })
+  const { tools } = await setup()
+  const tool = tools.get('put_r2_object')
+  const args = { bucket: 'files', key: 'config.json', content: 'original', content_type: 'application/json' }
+  assert.equal(tool.config.inputSchema.overwrite.parse(undefined), false)
+  assert.equal(tool.config.annotations.destructiveHint, true)
+  assert.ok(!(await tool.handler(args)).isError)
+  const collision = await tool.handler({ ...args, content: 'replacement' })
+  assert.equal(collision.isError, true)
+  assert.match(collision.content[0].text, /already exists/)
+  assert.equal(stored, 'original')
+  for (const confirm of [undefined, 'files:other.json']) {
+    const denied = await tool.handler({ ...args, content: 'replacement', overwrite: true, confirm })
+    assert.equal(denied.isError, true)
+    assert.match(denied.content[0].text, /Confirmation required/)
+  }
+  assert.equal(fetch.mock.callCount(), 2)
+  const replaced = await tool.handler({ ...args, content: 'replacement', overwrite: true, confirm: 'files:config.json' })
+  assert.ok(!replaced.isError)
+  assert.equal(stored, 'replacement')
+  assert.equal(fetch.mock.callCount(), 3)
+})
+
+test('database failure prevents inline R2 writes and ticket creation without leaking provider errors', async t => {
+  const { tools, env, values } = await setup()
+  let writes = 0
+  env.FILES_BUCKET = { async put() { writes++; throw new Error('unexpected write') } }
+  const original = env.AUDIT_DB.prepare.bind(env.AUDIT_DB)
+  t.mock.method(env.AUDIT_DB, 'prepare', (sql: string) => {
+    if (sql.includes('dashboard_file_state')) throw new Error('sensitive provider failure')
+    return original(sql)
+  })
+  for (const [name, args] of [
+    ['upload_file', { filename: 'report.txt', content_base64: 'eA==' }],
+    ['create_file_upload', { filename: 'report.txt', size: 1 }],
+  ] as const) {
+    const result = await tools.get(name).handler(args)
+    assert.equal(result.isError, true)
+    assert.match(result.content[0].text, /D1 migrations/)
+    assert.ok(!JSON.stringify(result).includes('sensitive provider failure'))
+  }
+  assert.equal(writes, 0)
+  assert.equal([...values.keys()].filter(key => key.startsWith('file-upload:')).length, 0)
+})

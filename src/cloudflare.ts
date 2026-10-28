@@ -237,7 +237,7 @@ export async function getR2Object(
 /**
  * PUT /accounts/:account_id/r2/buckets/:bucket_name/objects/:key
  *
- * Uploads text content to R2. Overwrites if the key already exists.
+ * Uploads text content to R2. Creates only unless overwrite is explicitly enabled.
  * Requires "R2:Write" permission on the API token.
  */
 export async function putR2Object(
@@ -246,6 +246,7 @@ export async function putR2Object(
   key: string,
   content: string,
   contentType = 'text/plain; charset=utf-8',
+  overwrite = false,
 ): Promise<void> {
   if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID) {
     throw new Error(
@@ -261,10 +262,14 @@ export async function putR2Object(
     headers: {
       Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
       'Content-Type': contentType,
+      ...(!overwrite ? { 'If-None-Match': '*' } : {}),
     },
     body: content,
   })
 
+  if (res.status === 412 && !overwrite) {
+    throw new CloudflareApiError('Object already exists. Use a different key, or explicitly enable overwrite with confirmation.', 409)
+  }
   if (!res.ok) {
     let message = res.statusText
     try {

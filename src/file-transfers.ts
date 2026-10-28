@@ -1,4 +1,4 @@
-import { readFileState } from './file-management'
+import { assertFileUploadReady, FileActionError } from './file-management'
 import { Hono } from 'hono'
 import { digest, isAllowedUser } from './dashboard-auth'
 import { MAX_FILE_BYTES, newFileKey, privateFileLinks, fileInfo } from './files'
@@ -9,6 +9,7 @@ export type UploadTicket = { login: string; key: string; name: string; size: num
 export async function createUploadTicket(env: Env, login: string, name: string, size: number) {
   if (!Number.isSafeInteger(size) || size < 0 || size > MAX_FILE_BYTES) throw new Error('File size must be between 0 and 25 MiB.')
   const key = newFileKey(login, name)
+  await assertFileUploadReady(env, login, key)
   const token = Array.from(crypto.getRandomValues(new Uint8Array(32)), byte => byte.toString(16).padStart(2, '0')).join('')
   const ticket: UploadTicket = { login, key, name, size, expiresAt: Date.now() + TICKET_SECONDS * 1000 }
   await env.OAUTH_KV.put('file-upload:' + await digest(token), JSON.stringify(ticket), { expirationTtl: TICKET_SECONDS })
@@ -33,8 +34,12 @@ fileTransfers.post('/upload', async c => {
   const length = c.req.header('content-length')
   if (!length || !/^\d+$/.test(length)) return c.json({ error: 'Content-Length is required.' }, 411)
   if (Number(length) !== ticket.size || Number(length) > MAX_FILE_BYTES) return c.json({ error: 'File size does not match the upload ticket.' }, 400)
-  const state = await readFileState(c.env, ticket.login, ticket.key)
-  if (state?.deleted_at != null || state?.purging) return c.json({ error: 'This file has been removed.' }, 409)
+  if (ticket.size > 0 && !c.req.raw.body) return c.json({ error: 'File contents are required.' }, 400)
+  try { await assertFileUploadReady(c.env, ticket.login, ticket.key) }
+  catch (error) {
+    if (error instanceof FileActionError) return c.json({ error: error.message }, error.status)
+    throw error
+  }
   // Conditional create prevents replay from overwriting an existing object, even during KV propagation.
   const object = await c.env.FILES_BUCKET.put(ticket.key, c.req.raw.body, {
     onlyIf: { etagDoesNotMatch: '*' }, httpMetadata: { contentType: 'application/octet-stream' },

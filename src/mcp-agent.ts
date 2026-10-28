@@ -7,6 +7,7 @@ import { z } from 'zod'
 import { withErrorHandling } from './error-handling'
 import { withAudit } from './audit-log'
 import { assertBranchWritable } from './guardrails'
+import { isAllowedUser } from './dashboard-auth'
 import {
   getWorkerDeployments,
   listR2Objects,
@@ -127,6 +128,19 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       summarize: (args: Args, result: import('@modelcontextprotocol/sdk/types.js').CallToolResult) => string,
       handler: (args: Args) => Promise<import('@modelcontextprotocol/sdk/types.js').CallToolResult>
     ) => withAudit(audit, props.login, toolName, summarize, withErrorHandling(handler))
+
+    const r2Tool = <Args>(handler: (args: Args) => Promise<import('@modelcontextprotocol/sdk/types.js').CallToolResult>) =>
+      withErrorHandling(async (args: Args) => {
+        if (!props.login || !isAllowedUser(props.login, this.env.GITHUB_ALLOWED_USERS, true)) {
+          throw new Error('R2 access denied. Reconnect with an allowed GitHub account.')
+        }
+        return handler(args)
+      })
+    const r2WriteTool = <Args>(
+      toolName: string,
+      summarize: (args: Args, result: import('@modelcontextprotocol/sdk/types.js').CallToolResult) => string,
+      handler: (args: Args) => Promise<import('@modelcontextprotocol/sdk/types.js').CallToolResult>
+    ) => withAudit(audit, props.login, toolName, summarize, r2Tool(handler))
 
     this.server.registerTool('set_note', {
       description: 'Save a persistent note in KV storage. Notes survive across sessions and can be read back with get_note, list_notes, or found via search_notes. Optional tags help group and filter related notes.',
@@ -831,7 +845,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
         cursor: z.string().optional(),
       },
       annotations: { title: 'List R2 objects', readOnlyHint: true, openWorldHint: true },
-    }, withErrorHandling(async ({ bucket, prefix, limit, cursor }) => {
+    }, r2Tool(async ({ bucket, prefix, limit, cursor }) => {
       const result = await listR2Objects(this.env, bucket, { prefix, limit, cursor })
       if (result.objects.length === 0) return { content: [{ type: 'text', text: `No objects in "${bucket}"${prefix ? ` (prefix: ${prefix})` : ''}.` }] }
       const fmt = (b: number) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b/1024).toFixed(1)} KB` : `${(b/1048576).toFixed(1)} MB`
@@ -850,7 +864,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
         key: z.string().describe('Object key / path, e.g. "assets/config.json"'),
       },
       annotations: { title: 'Get R2 object', readOnlyHint: true, openWorldHint: true },
-    }, withErrorHandling(async ({ bucket, key }) => {
+    }, r2Tool(async ({ bucket, key }) => {
       const { content, contentType, size } = await getR2Object(this.env, bucket, key)
       const fmt = (b: number) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b/1024).toFixed(1)} KB` : `${(b/1048576).toFixed(1)} MB`
       const header = `R2 Object: ${bucket}/${key}\nContent-Type: ${contentType}\nSize: ${fmt(size)}\n\n`
@@ -859,7 +873,8 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
 
     this.server.registerTool('put_r2_object', {
       description:
-        'Write text content to a Cloudflare R2 object. Creates or overwrites the key. ' +
+        'Write text content to a Cloudflare R2 object. Creates a new key by default and rejects existing objects. ' +
+        'To replace an object, set overwrite=true and confirm equal to bucket:key. Only overwrite when explicitly requested. ' +
         'Use for deploying config files, JSON data, HTML, scripts, or any text artifact directly to R2. ' +
         'Requires CLOUDFLARE_API_TOKEN (R2:Write) and CLOUDFLARE_ACCOUNT_ID.',
       inputSchema: {
@@ -867,10 +882,13 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
         key: z.string().describe('Object key / path, e.g. "assets/config.json"'),
         content: z.string().describe('Text content to upload'),
         content_type: z.string().default('text/plain; charset=utf-8').describe('MIME type'),
+        overwrite: z.boolean().default(false).describe('Explicitly allow replacement of an existing object'),
+        confirm: z.string().optional().describe('Required when overwrite=true; must equal bucket:key'),
       },
-      annotations: { title: 'Put R2 object', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-    }, writeTool('put_r2_object', ({ bucket, key }) => `Uploaded "${key}" to bucket "${bucket}"`, async ({ bucket, key, content, content_type }) => {
-      await putR2Object(this.env, bucket, key, content, content_type)
+      annotations: { title: 'Put R2 object', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    }, r2WriteTool('put_r2_object', ({ bucket, key }) => `Uploaded "${key}" to bucket "${bucket}"`, async ({ bucket, key, content, content_type, overwrite, confirm }) => {
+      if (overwrite) requireConfirmation(confirm, `${bucket}:${key}`)
+      await putR2Object(this.env, bucket, key, content, content_type, overwrite)
       const size = new TextEncoder().encode(content).length
       const fmt = (b: number) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b/1024).toFixed(1)} KB` : `${(b/1048576).toFixed(1)} MB`
       return { content: [{ type: 'text', text: `Uploaded "${key}" to R2 bucket "${bucket}" (${fmt(size)}, ${content_type}).` }] }
@@ -886,7 +904,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
         key: z.string().describe('Object key / path to delete'),
       },
       annotations: { title: 'Delete R2 object', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-    }, writeTool('delete_r2_object', ({ bucket, key }) => `Deleted "${key}" from bucket "${bucket}"`, async ({ bucket, key, confirm }) => {
+    }, r2WriteTool('delete_r2_object', ({ bucket, key }) => `Deleted "${key}" from bucket "${bucket}"`, async ({ bucket, key, confirm }) => {
       requireConfirmation(confirm, `${bucket}:${key}`)
       await deleteR2Object(this.env, bucket, key)
       return { content: [{ type: 'text', text: `Deleted "${key}" from R2 bucket "${bucket}".` }] }
@@ -1337,7 +1355,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
         location_hint: z.string().optional().describe('Location hint: "weur", "enam", "apac"'),
       },
       annotations: { title: 'Create R2 bucket', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-    }, writeTool('r2_bucket_create', ({ name }) => `Created R2 bucket "${name}"`, async ({ name, location_hint }) => {
+    }, r2WriteTool('r2_bucket_create', ({ name }) => `Created R2 bucket "${name}"`, async ({ name, location_hint }) => {
       const bucket = await createR2Bucket(this.env, name, { locationHint: location_hint })
       const lines = [`Created R2 bucket: ${bucket.name}`]
       if (bucket.location) lines.push(`Location: ${bucket.location}`)
@@ -1349,7 +1367,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       description: 'List all R2 buckets in the account.',
       inputSchema: { start_after: z.string().optional().describe('Last bucket name from the previous page'), per_page: z.number().int().min(1).max(100).default(100) },
       annotations: { title: 'List R2 buckets', readOnlyHint: true, openWorldHint: true },
-    }, withErrorHandling(async ({ start_after, per_page }) => {
+    }, r2Tool(async ({ start_after, per_page }) => {
       const buckets = await listR2Buckets(this.env, start_after, per_page)
       if (buckets.length === 0) return { content: [{ type: 'text', text: 'No R2 buckets found.' }] }
       const text = buckets.map((b) => {
@@ -1365,7 +1383,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       inputSchema: {
         confirm: z.string().describe("Exact target to confirm deletion/merge; see tool description"), name: z.string().describe('Bucket name') },
       annotations: { title: 'Delete R2 bucket', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-    }, writeTool('r2_bucket_delete', ({ name }) => `Deleted R2 bucket "${name}"`, async ({ name, confirm }) => {
+    }, r2WriteTool('r2_bucket_delete', ({ name }) => `Deleted R2 bucket "${name}"`, async ({ name, confirm }) => {
       requireConfirmation(confirm, name)
       await deleteR2Bucket(this.env, name)
       return { content: [{ type: 'text', text: `Deleted R2 bucket "${name}".` }] }

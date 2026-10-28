@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import { withErrorHandling } from './error-handling'
-import { activeFile, queueFileCleanup, statesFor, fileUsagePage, TRASH_RETENTION_MS, setFileProject, trashFile, restoreFile, createFileShare, listFileShares, revokeFileShare, validProject } from './file-management'
+import { assertFileUploadReady, activeFile, queueFileCleanup, statesFor, fileUsagePage, TRASH_RETENTION_MS, setFileProject, trashFile, restoreFile, createFileShare, listFileShares, revokeFileShare, validProject } from './file-management'
 import { withAudit } from './audit-log'
 import { createUploadTicket } from './file-transfers'
 import { MAX_FILE_BYTES, MAX_INLINE_BYTES, filePrefix, newFileKey, ownedFileKey, fileInfo, privateFileLinks, requireFileAccess } from './files'
@@ -24,6 +24,7 @@ export function registerFileTools(server: McpServer, env: Env, login: string, ct
     if (content_base64.length > 4 * Math.ceil(MAX_INLINE_BYTES / 3) || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(content_base64)) throw new Error('Invalid base64 or file exceeds 1 MiB. Use create_file_upload for larger files.')
     const decoded = atob(content_base64)
     if (decoded.length > MAX_INLINE_BYTES || btoa(decoded) !== content_base64) throw new Error('Invalid base64 or file exceeds 1 MiB.')
+    await assertFileUploadReady(env, login, key)
     let object: R2Object
     try { object = await bucket.put(key, Uint8Array.from(decoded, char => char.charCodeAt(0)), {
       httpMetadata: { contentType: 'application/octet-stream' }, customMetadata: { filename },
