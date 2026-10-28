@@ -1,4 +1,5 @@
 import { requireConfirmation, waitForRun, probeUrl } from './operations'
+import { registerFileTools } from './file-tools'
 import { McpAgent } from 'agents/mcp'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { Octokit } from 'octokit'
@@ -119,6 +120,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     const octokit = this.octokit()
     const props = this.props as GitHubProps
     const audit = this.env.AUDIT_DB
+    registerFileTools(this.server, this.env, props.login)
 
     const writeTool = <Args>(
       toolName: string,

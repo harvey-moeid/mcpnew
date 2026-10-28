@@ -3,6 +3,7 @@ interface Env {
   MCP_OBJECT: DurableObjectNamespace
   OAUTH_KV: KVNamespace
   AUDIT_DB: D1Database
+  FILES_BUCKET?: R2Bucket
   OAUTH_PROVIDER: import('@cloudflare/workers-oauth-provider').OAuthHelpers
   GITHUB_CLIENT_ID: string
   GITHUB_CLIENT_SECRET: string

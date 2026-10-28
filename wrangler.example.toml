@@ -42,3 +42,12 @@ enabled = true
 # GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, COOKIE_ENCRYPTION_KEY
 # CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (opsional untuk tool Cloudflare)
 # BRAVE_API_KEY (opsional untuk web_search)
+
+# File dashboard privat: buat bucket lalu aktifkan binding ini.
+# [[r2_buckets]]
+# binding = "FILES_BUCKET"
+# bucket_name = "github-mcp-files" # GANTI_INSTALASI: nama bucket file Anda
+
+# Purge expired trash every hour (UTC).
+[triggers]
+crons = ["17 * * * *"]

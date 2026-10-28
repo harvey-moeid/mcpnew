@@ -10,17 +10,18 @@ const { MyMCP } = await import('data:text/javascript;base64,' + Buffer.from(comp
 
 async function setup(rest = {}) {
   const audit: unknown[][] = []
+  const values = new Map<string, string>()
   const agent = new MyMCP()
   agent.props = { login: 'actor', name: 'Actor', accessToken: 'private-github-token' }
   agent.env = {
-    PROTECTED_BRANCHES: 'main,master', ALLOW_DIRECT_PUSH_TO_PROTECTED: 'false',
+    GITHUB_ALLOWED_USERS: 'actor', PROTECTED_BRANCHES: 'main,master', ALLOW_DIRECT_PUSH_TO_PROTECTED: 'false',
     CLOUDFLARE_ACCOUNT_ID: 'account', CLOUDFLARE_API_TOKEN: 'private-cloudflare-token',
-    OAUTH_KV: { async get() { return 'wrong/default' } },
-    AUDIT_DB: { prepare() { return { bind(...args: unknown[]) { audit.push(args); return { async run() {} } } } } },
+    OAUTH_KV: { async get(key: string) { return values.get(key) ?? (key.startsWith('default-repo:') ? 'wrong/default' : null) }, async put(key: string, value: string) { values.set(key, value) }, async delete(key: string) { values.delete(key) } },
+    AUDIT_DB: { prepare() { return { bind(...args: unknown[]) { audit.push(args); return { async run() {}, async first() { return null }, async all() { return { results: [] } } } } } } },
   }
   agent.octokit = () => ({ rest })
   await agent.init()
-  return { tools: agent.server.tools as Map<string, any>, audit }
+  return { tools: agent.server.tools as Map<string, any>, audit, env: agent.env, values }
 }
 
 test('repository writes cannot inherit default repo and every destructive tool requires confirmation', async () => {
@@ -121,4 +122,75 @@ test('page selectors reach GitHub list API and audit reads are scoped to the act
   assert.ok(!result.isError)
   const denied = await tools.get('get_audit_log').handler({ actor: 'another-user', limit: 20 })
   assert.equal(denied.isError, true)
+})
+
+
+test('MCP uploads binary files to owner dashboard storage and returns login-only URLs', async () => {
+  const { tools, env, audit } = await setup()
+  const writes: { key: string; bytes: Uint8Array; options: R2PutOptions }[] = []
+  env.FILES_BUCKET = { async put(key: string, bytes: Uint8Array, options: R2PutOptions) {
+    writes.push({ key, bytes, options })
+    return { key, size: bytes.length, uploaded: new Date(), customMetadata: options.customMetadata }
+  } }
+  const bytes = new Uint8Array([0, 255, 128, 1])
+  const content_base64 = Buffer.from(bytes).toString('base64')
+  const response = await tools.get('upload_file').handler({ filename: '日本.zip', content_base64 })
+  assert.ok(!response.isError)
+  const data = JSON.parse(response.content[0].text)
+  assert.equal(data.requiresLogin, true)
+  assert.match(data.downloadUrl, /\/dashboard\/api\/files\/download\?key=/)
+  assert.match(data.file.key, /^dashboard-files\/actor\//)
+  assert.deepEqual(writes[0].bytes, bytes)
+  assert.equal(writes[0].options.customMetadata?.filename, '日本.zip')
+  assert.ok(!JSON.stringify(audit).includes(content_base64))
+  const malformed = await tools.get('upload_file').handler({ filename: 'a', content_base64: 'not-base64!' })
+  assert.equal(malformed.isError, true)
+  assert.equal(writes.length, 1)
+  const oversized = await tools.get('upload_file').handler({ filename: 'a', content_base64: Buffer.alloc(1024 * 1024 + 1).toString('base64') })
+  assert.equal(oversized.isError, true)
+  assert.equal(writes.length, 1)
+})
+
+test('workspace upload tickets are short lived, hashed in KV and never placed in download URLs or audit', async () => {
+  const { tools, env, values, audit } = await setup()
+  env.FILES_BUCKET = {}
+  const response = await tools.get('create_file_upload').handler({ filename: 'report.pdf', size: 2048 })
+  assert.ok(!response.isError)
+  const data = JSON.parse(response.content[0].text)
+  assert.match(data.uploadToken, /^[a-f0-9]{64}$/)
+  assert.ok(Date.parse(data.expiresAt) > Date.now())
+  assert.ok(Date.parse(data.expiresAt) <= Date.now() + 600000)
+  assert.equal(data.requiresLogin, true)
+  assert.ok(!data.downloadUrl.includes(data.uploadToken))
+  assert.ok(!JSON.stringify([...values.entries(), audit]).includes(data.uploadToken))
+  const ticket = JSON.parse([...values.values()][0])
+  assert.equal(ticket.size, 2048)
+  assert.equal(ticket.login, 'actor')
+  assert.equal(ticket.key, data.key)
+  assert.equal((await tools.get('create_file_upload').handler({ filename: '../secret', size: 1 })).isError, true)
+  assert.equal((await tools.get('create_file_upload').handler({ filename: 'big.zip', size: 26 * 1024 * 1024 })).isError, true)
+})
+
+test('file tools recheck allowlist and refuse cross-account download keys before R2 reads', async () => {
+  const { tools, env } = await setup()
+  let reads = 0
+  env.FILES_BUCKET = { async head() { reads++; return null } }
+  assert.equal((await tools.get('get_file_download').handler({ key: 'dashboard-files/another-user/secret' })).isError, true)
+  assert.equal(reads, 0)
+  env.GITHUB_ALLOWED_USERS = 'another-user'
+  assert.equal((await tools.get('create_file_upload').handler({ filename: 'a', size: 0 })).isError, true)
+  assert.equal((await tools.get('list_files').handler({})).isError, true)
+})
+
+test('MCP file listing uses the same per-account prefix and cursor as the dashboard', async () => {
+  const { tools, env } = await setup()
+  env.FILES_BUCKET = { async list(options: R2ListOptions) {
+    assert.equal(options.prefix, 'dashboard-files/actor/')
+    assert.equal(options.cursor, 'prior')
+    return { objects: [{ key: 'dashboard-files/actor/uuid/name.zip', uploaded: new Date(), size: 123, customMetadata: { filename: 'name.zip' } }], truncated: true, cursor: 'next' }
+  } }
+  const response = await tools.get('list_files').handler({ cursor: 'prior' })
+  const data = JSON.parse(response.content[0].text)
+  assert.equal(data.cursor, 'next')
+  assert.equal(data.files[0].requiresLogin, true)
 })

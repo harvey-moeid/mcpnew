@@ -6,7 +6,7 @@ export const dashboardHtml = String.raw`<!doctype html>
 <body>
 <div id="app" class="shell">
 <aside class="sidebar" id="sidebar"><a href="/dashboard" class="brand" aria-label="GitHub Ops"><span class="brand-mark">G<span>↗</span></span><span>GitHub <strong>Ops</strong><small>PERSONAL CONTROL ROOM</small></span></a><div class="workspace-label">WORKSPACE <span class="live-dot"></span></div>
-<nav aria-label="Navigasi utama"><button data-view="overview" class="nav-item active"><span class="nav-icon">◫</span>Ringkasan</button><button data-view="repositories" class="nav-item"><span class="nav-icon">▤</span>Repositori<span id="repo-badge" class="nav-count">—</span></button><button data-view="pulls" class="nav-item"><span class="nav-icon">⑂</span>Pull requests<span id="pr-badge" class="nav-count">—</span></button><button data-view="deployments" class="nav-item"><span class="nav-icon">↗</span>Deployment</button><button data-view="activity" class="nav-item"><span class="nav-icon">≋</span>Aktivitas</button><div class="nav-divider"></div><button data-view="settings" class="nav-item"><span class="nav-icon">⚙</span>Koneksi & akses</button></nav>
+<nav aria-label="Navigasi utama"><button data-view="overview" class="nav-item active"><span class="nav-icon">◫</span>Ringkasan</button><button data-view="repositories" class="nav-item"><span class="nav-icon">▤</span>Repositori<span id="repo-badge" class="nav-count">—</span></button><button data-view="pulls" class="nav-item"><span class="nav-icon">⑂</span>Pull requests<span id="pr-badge" class="nav-count">—</span></button><button data-view="deployments" class="nav-item"><span class="nav-icon">↗</span>Deployment</button><button data-view="files" class="nav-item"><span class="nav-icon">▤</span>File R2</button><button data-view="activity" class="nav-item"><span class="nav-icon">≋</span>Aktivitas</button><div class="nav-divider"></div><button data-view="settings" class="nav-item"><span class="nav-icon">⚙</span>Koneksi & akses</button></nav>
 <div class="sidebar-bottom"><div class="endpoint-card"><span class="eyebrow">MCP ENDPOINT</span><span class="endpoint-host">${new URL(installation.publicOrigin).host}</span><button id="copy-sidebar" class="text-button">Salin endpoint <span>↗</span></button></div><div class="profile"><div id="profile-avatar" class="avatar">G</div><div><strong id="profile-name">Workspace pribadi</strong><small id="profile-sub">Masuk untuk melanjutkan</small></div><button id="logout" class="icon-button hidden" aria-label="Keluar dari dashboard">↪</button></div></div></aside>
 <div class="main-wrap"><header class="topbar"><button id="menu-toggle" class="icon-button mobile-only" aria-label="Buka navigasi" aria-expanded="false">☰</button><div class="breadcrumb">Workspace <span>/</span> <strong id="breadcrumb-current">Ringkasan</strong></div><div class="top-actions"><span class="top-chip"><i class="live-dot"></i>GitHub Ops</span><button id="theme-toggle" class="icon-button" aria-label="Ganti tema">◐</button><a href="https://github.com/${installation.githubOwner}/${installation.githubRepo}" target="_blank" rel="noopener noreferrer" class="icon-button" aria-label="Buka source repo">↗</a></div></header>
 <main id="main"><section id="login-view" class="login-view"><div class="login-intro"><span class="eyebrow accent">YOUR WORKSPACE, IN FOCUS</span><h1>Satu tempat.<br>Semua <span>terpantau.</span></h1><p>Pantau repositori, pemeriksaan PR, deployment, dan aktivitas MCP dari satu dashboard pribadi.</p><a href="/dashboard/login" class="button primary">Masuk dengan GitHub <span>↗</span></a><div class="login-note"><span class="live-dot"></span>Hanya akun yang diizinkan · Data tetap privat</div><div class="login-features"><span>⑂ Pemeriksaan PR</span><span>↗ Cloudflare Workers</span><span>≋ Audit aktivitas</span></div></div><div class="login-art" aria-hidden="true"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><div class="art-grid"></div><div class="art-center">G<span>↗</span></div><div class="art-label label-one">REPOSITORIES <span>▤</span></div><div class="art-label label-two"><i class="live-dot"></i> YOUR CONTROL ROOM</div><div class="art-label label-three">DEPLOYMENTS <span>↗</span></div></div><div class="login-footer"><span>GITHUB OPS / CONTROL ROOM</span><a href="${installation.publicOrigin}/mcp">Endpoint MCP ↗</a></div></section>
@@ -17,6 +17,8 @@ export const dashboardHtml = String.raw`<!doctype html>
 <section id="view-pulls" class="view hidden"><div class="section-toolbar"><h2>PR terbuka <span class="small muted">· hingga 30 PR terbaru</span></h2><select id="pr-filter" aria-label="Filter pull request"><option value="all">Semua status</option><option value="failure">Pemeriksaan gagal</option><option value="pending">Berjalan</option><option value="success">Lolos</option><option value="draft">Draft</option></select></div><div class="panel" id="pulls-list"></div></section>
 <section id="view-deployments" class="view hidden"><div class="deployment-header"><div><span class="eyebrow accent">LIVE ENVIRONMENT</span><h2>${installation.workerName}</h2><p class="muted">Riwayat versi dan persentase rollout dari Cloudflare.</p></div><a href="${installation.publicOrigin}/" target="_blank" rel="noopener noreferrer" class="button secondary">Buka layanan ↗</a></div><div id="deployments-list" class="panel"></div></section>
 <section id="view-activity" class="view hidden"><div class="section-toolbar"><div><h2>Audit aktivitas</h2><p class="small muted">Aksi MCP milik akunmu. Log bersifat best-effort.</p></div><label class="checkbox"><input id="audit-errors" type="checkbox"> Hanya error</label></div><div class="panel table-scroll"><table><thead><tr><th>Aktivitas</th><th>Ringkasan</th><th>Status</th><th>Waktu</th></tr></thead><tbody id="audit-table"></tbody></table></div><div class="load-more-wrap"><button id="load-audit" class="button secondary hidden">Muat aktivitas sebelumnya</button></div></section>
+<section id="view-files" class="view hidden"><article class="panel" style="padding:24px"><h2>File R2</h2><p class="muted">Privat secara default. File di tempat sampah bisa dipulihkan selama 7 hari.</p><div id="file-usage" role="status" style="margin:16px 0">Menghitung penyimpanan…</div><button id="continue-usage" class="button secondary hidden">Lanjutkan perhitungan</button><form id="upload-form" style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:20px 0"><label for="file-input">Pilih file (maks. 25 MiB)</label><input id="file-input" type="file" multiple required><button id="upload-files" class="button" type="submit" disabled>Upload file</button></form><div style="display:flex;gap:12px;flex-wrap:wrap;margin:20px 0"><label for="file-mode">Tampilkan</label><select id="file-mode"><option value="active">File aktif</option><option value="trash">Tempat sampah</option></select><label for="file-project-filter">Label proyek</label><input id="file-project-filter" maxlength="80" placeholder="Semua proyek"><button id="filter-files" class="button secondary">Terapkan filter</button></div><p id="file-status" role="status" aria-live="polite"></p><div class="table-scroll"><table><thead><tr><th>Nama file</th><th>Proyek</th><th>Ukuran</th><th>Waktu</th><th>Aksi</th></tr></thead><tbody id="files-table"></tbody></table></div><button id="load-files" class="button secondary hidden" style="margin-top:16px">Muat file berikutnya</button></article>
+<dialog id="file-dialog" style="max-width:600px;width:90%;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:12px;padding:24px"><button id="close-file-dialog" class="button secondary" style="float:right">Tutup</button><h2 id="file-dialog-title">Kelola file</h2><div id="file-dialog-body"></div><p id="file-dialog-status" role="status" aria-live="polite"></p></dialog></section>
 <section id="view-settings" class="view hidden"><div id="settings-grid" class="settings-grid"></div></section>
 <footer class="app-footer"><span>GITHUB OPS <span class="muted">/ CONTROL ROOM</span></span><span>Data langsung dari GitHub & Cloudflare <i class="live-dot"></i></span></footer></div>
 </main></div></div><div id="toast" class="toast hidden" role="status"></div>
@@ -32,12 +34,13 @@ export const dashboardScript = String.raw`'use strict';
 const installation = ${JSON.stringify(installation).replace(/</g, "\\u003c")};
 (function () {
   const $ = function (id) { return document.getElementById(id); };
-  const state = { session: null, repositories: [], repo: '', details: null, deployments: null, audit: [], auditMore: false, repoMore: false, repoPage: 1, view: 'overview', generation: 0, errors: {} };
+  const state = { session: null, files: [], filesCursor: null, filesConfigured: false, filesBusy: false, filesLoading: false, fileGeneration: 0, usage: null, usageCursor: null, usageBusy: false, repositories: [], repo: '', details: null, deployments: null, audit: [], auditMore: false, repoMore: false, repoPage: 1, view: 'overview', generation: 0, errors: {} };
   const views = {
     overview: ['WORKSPACE OVERVIEW', 'Ringkasan workspace', 'Lihat yang perlu perhatian, lalu lanjutkan pekerjaanmu.', 'Ringkasan'],
     repositories: ['YOUR REPOSITORIES', 'Repositori', 'Semua repo yang bisa diakses akun GitHub-mu.', 'Repositori'],
     pulls: ['CODE REVIEW', 'Pull requests', 'Temukan PR yang siap direview atau membutuhkan perbaikan.', 'Pull requests'],
     deployments: ['DELIVERY & RELEASES', 'Deployment', 'Versi Worker dan rollout production dalam satu tampilan.', 'Deployment'],
+    files: ['PRIVATE STORAGE', 'File R2', 'Upload, lihat daftar, dan download file milik akunmu.', 'File R2'],
     activity: ['WORKSPACE AUDIT', 'Aktivitas', 'Jejak aksi MCP milik akunmu, dari yang terbaru.', 'Aktivitas'],
     settings: ['ACCOUNT & CONNECTIONS', 'Koneksi & akses', 'Kelola sesi, endpoint MCP, dan lihat konfigurasi akses.', 'Koneksi & akses']
   };
@@ -66,11 +69,13 @@ const installation = ${JSON.stringify(installation).replace(/</g, "\\u003c")};
     $('sidebar').classList.remove('open'); $('menu-toggle').setAttribute('aria-expanded', 'false');
     document.querySelector('.context-bar').classList.toggle('hidden', !['overview', 'pulls'].includes(view));
     history.replaceState(null, '', '/dashboard#' + view);
+    if (view === 'files') { void loadFiles(false); void loadUsage(false); }
     if (view === 'repositories') renderRepos();
     if (view === 'pulls') renderPulls();
   }
   function setNotice() { const errors = Object.values(state.errors).filter(Boolean); $('notice').textContent = errors.join(' '); $('notice').classList.toggle('hidden', !errors.length); }
   function showLogin(message) {
+    if ($('file-dialog').open) closeFileDialog();
     state.session = null; $('authenticated').classList.add('hidden'); $('login-view').classList.remove('hidden'); $('logout').classList.add('hidden');
     $('profile-name').textContent = 'Workspace pribadi'; $('profile-sub').textContent = 'Masuk untuk melanjutkan'; $('profile-avatar').textContent = 'G';
     if (message) document.querySelector('.login-intro p').textContent = message;
@@ -104,6 +109,157 @@ const installation = ${JSON.stringify(installation).replace(/</g, "\\u003c")};
     catch (error) { state.deployments = { error: error.message }; state.errors.deployments = error.message; }
     renderDeployments(); renderStats(); setNotice();
   }
+  function formatBytes(size) {
+    if (size < 1024) return size + ' B';
+    if (size < 1024 * 1024) return (size / 1024).toFixed(1) + ' KiB';
+    return (size / (1024 * 1024)).toFixed(1) + ' MiB';
+  }
+  function renderFiles() {
+    $('upload-files').disabled = !state.filesConfigured || state.filesBusy;
+    $('file-input').disabled = !state.filesConfigured || state.filesBusy;
+    $('load-files').classList.toggle('hidden', !state.filesCursor);
+    const trash = $('file-mode').value === 'trash';
+    $('files-table').innerHTML = state.files.length ? state.files.map(function (file) {
+      const key = e(file.key);
+      const actions = trash ? '<button class="button secondary" data-file-action="restore" data-key="' + key + '" ' + (Date.now() >= file.restoreUntil ? 'disabled' : '') + '>Pulihkan</button>' :
+        '<a class="button secondary" href="/dashboard/api/files/download?key=' + e(encodeURIComponent(file.key)) + '" download>Download</a> <button class="button secondary" data-file-action="project" data-key="' + key + '">Label</button> <button class="button secondary" data-file-action="share" data-key="' + key + '">Bagikan</button> <button class="button secondary" data-file-action="trash" data-key="' + key + '">Hapus</button>';
+      return '<tr><td class="summary">' + e(file.name) + '</td><td>' + e(file.project || '—') + '</td><td class="nowrap">' + e(formatBytes(file.size)) + '</td><td>' + e(shortDate(file.uploadedAt)) + (trash ? '<br><small>Pulihkan sebelum ' + e(shortDate(new Date(file.restoreUntil).toISOString())) + '</small>' : '') + '</td><td><div style="display:flex;gap:8px;flex-wrap:wrap">' + actions + '</div></td></tr>';
+    }).join('') : '<tr><td colspan="5">' + empty(state.filesConfigured ? 'Tidak ada file pada halaman ini' : 'Penyimpanan belum dikonfigurasi', state.filesConfigured ? (state.filesCursor ? 'Muat halaman berikutnya atau ubah filter.' : 'Upload file baru atau ubah filter.') : 'Hubungkan bucket R2 untuk mulai menyimpan file.', '▤') + '</td></tr>';
+  }
+  async function loadFiles(append) {
+    if (append && state.filesLoading) return;
+    const generation = ++state.fileGeneration;
+    state.filesLoading = true; $('load-files').disabled = true;
+    const query = new URLSearchParams({ trash: String($('file-mode').value === 'trash'), project: $('file-project-filter').value.trim() });
+    if (append && state.filesCursor) query.set('cursor', state.filesCursor);
+    try {
+      const data = await api('files?' + query);
+      if (generation !== state.fileGeneration) return;
+      state.files = append ? state.files.concat(data.files) : data.files;
+      state.filesCursor = data.cursor; state.filesConfigured = data.configured;
+      renderFiles();
+    } catch (error) {
+      if (generation !== state.fileGeneration) return;
+      if (error.status === 401) { showLogin(error.message); return; }
+      $('file-status').textContent = error.message;
+    } finally { if (generation === state.fileGeneration) { state.filesLoading = false; $('load-files').disabled = false; } }
+  }
+  async function loadUsage(append) {
+    if (state.usageBusy) return;
+    state.usageBusy = true; $('continue-usage').disabled = true;
+    if (!append) { state.usage = { activeCount: 0, activeBytes: 0, trashCount: 0, trashBytes: 0 }; state.usageCursor = null; }
+    try {
+      for (let page = 0; page < 10; page++) {
+        const data = await api('files/usage' + (state.usageCursor ? '?cursor=' + encodeURIComponent(state.usageCursor) : ''));
+        Object.keys(state.usage).forEach(function (key) { state.usage[key] += data[key]; });
+        state.usageCursor = data.cursor;
+        if (!data.cursor) break;
+      }
+      const total = state.usage;
+      $('file-usage').textContent = 'File aktif: ' + total.activeCount + ' · ' + formatBytes(total.activeBytes) + ' | Tempat sampah: ' + total.trashCount + ' · ' + formatBytes(total.trashBytes) + ' | Total: ' + formatBytes(total.activeBytes + total.trashBytes) + (state.usageCursor ? ' (perhitungan sebagian)' : '');
+      $('continue-usage').classList.toggle('hidden', !state.usageCursor);
+    } catch (error) { $('file-usage').textContent = 'Penggunaan belum dapat dihitung: ' + error.message; }
+    finally { state.usageBusy = false; $('continue-usage').disabled = false; }
+  }
+  async function fileMutation(action, body) {
+    return api('files/manage/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  }
+  let dialogKey = null;
+  function closeFileDialog() { $('file-dialog').close(); $('file-dialog-body').replaceChildren(); dialogKey = null; }
+  $('close-file-dialog').addEventListener('click', closeFileDialog);
+  $('file-dialog').addEventListener('cancel', closeFileDialog);
+  async function showShares(key) {
+    const data = await api('files/manage/shares?key=' + encodeURIComponent(key));
+    if (dialogKey !== key) return;
+    $('active-file-shares').innerHTML = data.shares.length ? data.shares.map(function (share) { return '<p>' + e(shortDate(new Date(share.expiresAt).toISOString())) + ' <button class="button secondary" data-revoke-share="' + e(share.id) + '">Cabut akses</button></p>'; }).join('') : '<p class="muted">Tidak ada link aktif.</p>';
+  }
+  $('files-table').addEventListener('click', async function (event) {
+    const button = event.target.closest('[data-file-action]'); if (!button) return;
+    const key = button.dataset.key, action = button.dataset.fileAction;
+    const file = state.files.find(function (item) { return item.key === key; }); if (!file) return;
+    try {
+      if (action === 'trash' || action === 'restore') {
+        if (action === 'trash' && !confirm('Pindahkan "' + file.name + '" ke tempat sampah? Semua link berbagi akan dicabut. File bisa dipulihkan selama 7 hari.')) return;
+        button.disabled = true; await fileMutation(action, { key });
+        $('file-status').textContent = action === 'trash' ? 'File dipindahkan ke tempat sampah.' : 'File dipulihkan. Link berbagi lama tetap nonaktif.';
+        await Promise.all([loadFiles(false), loadUsage(false)]); return;
+      }
+      dialogKey = key; $('file-dialog-status').textContent = '';
+      $('file-dialog-title').textContent = file.name;
+      if (action === 'project') {
+        $('file-dialog-body').innerHTML = '<form id="file-project-form"><label for="file-project">Label proyek (kosongkan untuk menghapus label)</label><input id="file-project" maxlength="80" value="' + e(file.project || '') + '"><button class="button" type="submit">Simpan label</button></form>';
+      } else {
+        $('file-dialog-body').innerHTML = '<p>Siapa pun yang memegang link sementara bisa mengunduh file ini tanpa login hingga link kedaluwarsa atau dicabut.</p><form id="file-share-form"><label for="file-share-hours">Masa berlaku</label><select id="file-share-hours"><option value="1">1 jam</option><option value="24">24 jam</option><option value="168">7 hari</option></select><button class="button" type="submit">Buat link berbagi</button></form><div id="new-file-share" role="status"></div><h3>Link aktif (maks. 100 terbaru)</h3><div id="active-file-shares"></div>';
+      }
+      $('file-dialog').showModal();
+      if (action === 'share') await showShares(key);
+    } catch (error) { $('file-status').textContent = error.message; $('file-dialog-status').textContent = error.message; }
+    finally { if (button.isConnected) button.disabled = false; }
+  });
+  $('file-dialog').addEventListener('submit', async function (event) {
+    event.preventDefault(); const key = dialogKey; if (!key) return;
+    const button = event.target.querySelector('button[type="submit"]'); button.disabled = true;
+    try {
+      if (event.target.id === 'file-project-form') {
+        await fileMutation('project', { key, project: $('file-project').value });
+        if (dialogKey === key) closeFileDialog(); await loadFiles(false);
+      } else {
+        const data = await fileMutation('share', { key, hours: Number($('file-share-hours').value) });
+        if (dialogKey !== key) return;
+        const input = document.createElement('input'); input.readOnly = true; input.value = data.url; input.style.width = '100%'; input.setAttribute('aria-label', 'Link berbagi sementara');
+        const text = document.createElement('p'); text.textContent = 'Berlaku sampai ' + shortDate(new Date(data.expiresAt).toISOString()) + '. Salin link ini sekarang; link tidak disimpan di browser.';
+        const copy = document.createElement('button'); copy.className = 'button secondary'; copy.type = 'button'; copy.textContent = 'Salin link'; copy.addEventListener('click', async function () { try { await navigator.clipboard.writeText(data.url); toast('Link berbagi disalin'); } catch (_) { input.select(); } });
+        $('new-file-share').replaceChildren(text, input, copy); await showShares(key);
+      }
+    } catch (error) { if (dialogKey === key) $('file-dialog-status').textContent = error.message; }
+    finally { if (button.isConnected) button.disabled = false; }
+  });
+  $('file-dialog').addEventListener('click', async function (event) {
+    const button = event.target.closest('[data-revoke-share]'); if (!button || !dialogKey) return;
+    const key = dialogKey; button.disabled = true;
+    try { await fileMutation('revoke', { id: button.dataset.revokeShare }); if (dialogKey === key) { $('new-file-share').replaceChildren(); await showShares(key); $('file-dialog-status').textContent = 'Akses link dicabut.'; } }
+    catch (error) { $('file-dialog-status').textContent = error.message; }
+    finally { if (button.isConnected) button.disabled = false; }
+  });
+  $('file-mode').addEventListener('change', function () { void loadFiles(false); });
+  $('filter-files').addEventListener('click', function () { void loadFiles(false); });
+  $('file-project-filter').addEventListener('keydown', function (event) { if (event.key === 'Enter') { event.preventDefault(); void loadFiles(false); } });
+  $('continue-usage').addEventListener('click', function () { void loadUsage(true); });
+  function uploadFile(file, index, total) {
+    return new Promise(function (resolve, reject) {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/dashboard/api/files?name=' + encodeURIComponent(file.name));
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+      xhr.timeout = 300000;
+      xhr.upload.onprogress = function (event) {
+        $('file-status').textContent = 'Mengunggah ' + index + '/' + total + ': ' + file.name + (event.lengthComputable ? ' · ' + Math.round(event.loaded / event.total * 100) + '%' : '');
+      };
+      xhr.onload = function () {
+        let data = {}; try { data = JSON.parse(xhr.responseText); } catch (_) {}
+        if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+        else { const error = new Error(data.error || 'Upload gagal. Coba lagi.'); error.status = xhr.status; reject(error); }
+      };
+      xhr.onerror = function () { reject(new Error('Koneksi terputus. Periksa daftar file sebelum mencoba upload lagi.')); };
+      xhr.ontimeout = function () { reject(new Error('Upload terlalu lama. Periksa daftar file sebelum mencoba lagi.')); };
+      xhr.send(file);
+    });
+  }
+  $('upload-form').addEventListener('submit', async function (event) {
+    event.preventDefault(); if (state.filesBusy) return;
+    const files = Array.from($('file-input').files);
+    if (!files.length) return;
+    const invalid = files.find(function (file) { return file.size > 25 * 1024 * 1024; });
+    if (invalid) { $('file-status').textContent = invalid.name + ': ukuran maksimal 25 MiB per file.'; return; }
+    state.filesBusy = true; renderFiles(); let completed = 0;
+    try {
+      for (const file of files) { await uploadFile(file, completed + 1, files.length); completed++; }
+      $('file-status').textContent = completed + ' file berhasil disimpan di R2.'; $('file-input').value = '';
+    } catch (error) {
+      $('file-status').textContent = completed + ' file berhasil. ' + error.message;
+      if (error.status === 401) showLogin(error.message);
+    } finally { state.filesBusy = false; await Promise.all([loadFiles(false), loadUsage(false)]); renderFiles(); }
+  });
+  $('load-files').addEventListener('click', function () { void loadFiles(true); });
   async function loadAudit(append) {
     const errorsOnly = $('audit-errors').checked;
     const before = append && state.audit.length ? '&before=' + state.audit[state.audit.length - 1].id : '';
@@ -181,7 +337,7 @@ const installation = ${JSON.stringify(installation).replace(/</g, "\\u003c")};
     $('refresh').disabled = true;
     try { await loadRepos(false); delete state.errors.repositories; }
     catch (error) { state.errors.repositories = error.message; if (error.status === 401) { showLogin(error.message); $('refresh').disabled = false; return; } }
-    await Promise.allSettled([loadDetails(), loadDeployments(), loadAudit(false)]);
+    await Promise.allSettled([loadDetails(), loadDeployments(), loadAudit(false), ...(state.view === 'files' ? [loadFiles(false), loadUsage(false)] : [])]);
     setNotice(); $('refresh').disabled = false;
   }
   async function logout() { try { await api('logout', { method: 'POST' }); showLogin(); location.assign('/dashboard'); } catch (error) { if (error.status === 401) { location.assign('/dashboard'); return; } toast(error.message); } }

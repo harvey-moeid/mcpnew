@@ -37,7 +37,8 @@ function mockSite(mcpStatus: number) {
       protected_resources: [origin + '/mcp'], code_challenge_methods_supported: ['S256'],
     })
     if (path === '/mcp') return new Response(null, { status: mcpStatus })
-    if (path === '/dashboard/api/session') return Response.json({}, { status: 401 })
+    if (path === '/shared-files/invalid') return new Response('Unavailable', { status: 404 })
+    if (path === '/dashboard/api/session' || path === '/dashboard/api/files') return Response.json({}, { status: 401 })
     return new Response('<html></html>', { headers: { 'Content-Type': 'text/html' } })
   }
 }

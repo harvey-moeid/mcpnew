@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "npm run check:installation && wrangler deploy",
+    "deploy": "npm run check:installation && wrangler d1 migrations apply AUDIT_DB --remote && wrangler deploy",
     "check:installation": "node scripts/check-installation.mjs",
     "smoke": "node scripts/smoke.mjs",
     "type-check": "tsc --noEmit",
@@ -27,7 +27,7 @@
     "wrangler": "^4.152.0"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.13.0"
   },
   "overrides": {
     "body-parser": "^2.4.0",
