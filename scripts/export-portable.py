@@ -5,11 +5,11 @@ from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED
 
 ROOT = Path(__file__).resolve().parent.parent
-FOLDERS = ('src', 'tests', 'skills', 'docs', 'migrations', '.github', 'scripts')
+FOLDERS = ('src', 'tests', 'skills', 'docs', 'migrations', '.github', 'scripts', 'public')
 TOP_LEVEL = ('package.json', 'package-lock.json', 'tsconfig.json', 'worker-configuration.d.ts',
              '.gitignore', '.dev.vars.example', 'BACA-DULU.md',
              'installation.example.json', 'wrangler.example.toml')
-EXTENSIONS = {'.ts', '.js', '.mjs', '.json', '.md', '.sql', '.yml', '.yaml', '.toml', '.py', '.csv', '.txt'}
+EXTENSIONS = {'.ts', '.js', '.mjs', '.json', '.md', '.sql', '.yml', '.yaml', '.toml', '.py', '.csv', '.txt', '.png', '.webp', '.ico'}
 EXCLUDED = {'.git', 'node_modules', '.wrangler', '__pycache__', 'work', 'output', 'dist'}
 
 
