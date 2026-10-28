@@ -8,7 +8,7 @@
     "check:installation": "node scripts/check-installation.mjs",
     "smoke": "node scripts/smoke.mjs",
     "type-check": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test tests/*.test.ts"
+    "test": "node scripts/run-tests.mjs"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^1.2.4",

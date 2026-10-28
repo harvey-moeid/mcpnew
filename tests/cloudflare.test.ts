@@ -1,6 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { listPagesProjects, getPagesProject, listPagesDeployments, triggerPagesDeployment, rollbackWorker, verifyCloudflareToken } from '../src/cloudflare.ts'
+import { build } from 'esbuild'
+const compiled = await build({ entryPoints: ['src/cloudflare.ts'], bundle: true, platform: 'node', format: 'esm', write: false })
+const cloudflare = await import('data:text/javascript;base64,' + Buffer.from(compiled.outputFiles[0].text).toString('base64'))
+const { listPagesProjects, getPagesProject, listPagesDeployments, triggerPagesDeployment, rollbackWorker, verifyCloudflareToken } = cloudflare
 const env = { CLOUDFLARE_ACCOUNT_ID: 'account', CLOUDFLARE_API_TOKEN: 'private-token' } as Env
 
 test('all Pages tools use the expected API paths, pagination and form format', async t => {
@@ -37,7 +40,7 @@ test('rollback only deploys the explicitly chosen version and token verification
 })
 
 test('Worker details omit binding values and preserve partial results', async t => {
-  const { workerDetails } = await import('../src/cloudflare.ts')
+  const { workerDetails } = cloudflare
   t.mock.method(globalThis, 'fetch', async (url: string) => {
     if (url.endsWith('/settings')) return Response.json({ success: true, result: { bindings: [{ name: 'SECRET', type: 'secret_text', text: 'private-binding-value' }] } })
     if (url.endsWith('/schedules')) return Response.json({ success: false, errors: [] }, { status: 403 })
@@ -47,4 +50,59 @@ test('Worker details omit binding values and preserve partial results', async t 
   assert.deepEqual(result.bindings, [{ name: 'SECRET', type: 'secret_text' }])
   assert.deepEqual(result.unavailable, ['crons'])
   assert.ok(!JSON.stringify(result).includes('private-binding-value'))
+})
+
+test('R2 admin binary reads are lossless and bounded; reserved private keys cannot bypass owner routes', async t => {
+  const { getR2Object, putR2Object, deleteR2Object } = cloudflare
+  const binary = new Uint8Array([0, 255, 128, 1])
+  let calls = 0, last: RequestInit | undefined
+  t.mock.method(globalThis, 'fetch', async (_url: string, options: RequestInit) => { calls++; last = options; return new Response(binary) })
+  assert.equal((await getR2Object(env, 'files', 'archive.zip', 'base64')).content, Buffer.from(binary).toString('base64'))
+  await assert.rejects(getR2Object(env, 'files', 'archive.zip'), /binary/)
+  await putR2Object(env, 'files', 'archive.zip', '', 'application/zip', true, binary)
+  assert.deepEqual(last?.body, binary)
+  assert.ok(last?.signal)
+  assert.equal(new Headers(last?.headers).get('If-None-Match'), null)
+  const before = calls
+  await assert.rejects(getR2Object(env, 'files', 'dashboard-files/other/secret'), /Managed private/)
+  await assert.rejects(deleteR2Object(env, 'files', 'dashboard-files/other/secret'), /Managed private/)
+  await assert.rejects(putR2Object(env, 'files', 'big.txt', 'x'.repeat(1024 * 1024 + 1)), /exceeds/)
+  assert.equal(calls, before)
+  t.mock.method(globalThis, 'fetch', async () => new Response(null, { headers: { 'Content-Length': String(1024 * 1024 + 1) } }))
+  await assert.rejects(getR2Object(env, 'files', 'big.zip', 'base64'), /size/)
+})
+
+test('Cloudflare retries transient safe reads at most once and never replays writes', async t => {
+  let calls = 0
+  t.mock.method(globalThis, 'fetch', async (_url: string, options: RequestInit) => {
+    calls++; assert.ok(options.signal); assert.equal(options.redirect, 'error')
+    return Response.json({ success: false, errors: [{ message: 'unavailable' }] }, { status: 503 })
+  })
+  await assert.rejects(listPagesProjects(env))
+  assert.equal(calls, 2)
+  calls = 0
+  await assert.rejects(triggerPagesDeployment(env, 'project', 'staging'))
+  assert.equal(calls, 1)
+})
+
+
+test('R2 REST preserves literal object slashes and top-level pagination, including hidden-only pages', async t => {
+  const calls: string[] = []
+  t.mock.method(globalThis, 'fetch', async (url: string) => {
+    calls.push(url)
+    if (url.includes('?')) return Response.json({ success: true, result: [{ key: 'dashboard-files/other/private', size: 1 }], result_info: { is_truncated: true, cursor: 'next' } })
+    return new Response('text')
+  })
+  const listing = await cloudflare.listR2Objects(env, 'files', { prefix: 'folder/', cursor: 'prior', limit: 20 })
+  assert.deepEqual(listing.objects, [])
+  assert.equal(listing.truncated, true)
+  assert.equal(listing.cursor, 'next')
+  const content = await cloudflare.getR2Object(env, 'files', 'folder/日本 #.txt')
+  assert.equal(content.content, 'text')
+  assert.ok(calls[1].endsWith('/objects/folder/' + encodeURIComponent('日本 #.txt')))
+  assert.ok(!calls[1].includes('%2F'))
+  await assert.rejects(cloudflare.getR2Object(env, 'files', 'x/../secret'), /dot path/)
+  const before = calls.length
+  await assert.rejects(cloudflare.putR2Object(env, 'files', 'new.txt', 'text'), /Safe create-only/)
+  assert.equal(calls.length, before)
 })

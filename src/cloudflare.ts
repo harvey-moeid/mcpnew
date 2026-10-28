@@ -7,6 +7,34 @@
  * `wrangler secret put CLOUDFLARE_ACCOUNT_ID`.
  */
 
+import { readFileBytes } from './file-content'
+import { MAX_INLINE_BYTES } from './files'
+
+// Only safe reads retry once. Writes (including workflow/resource creation) never replay.
+async function cfRequest(url: string, options: RequestInit = {}): Promise<Response> {
+  const signal = options.signal ?? AbortSignal.timeout(15000)
+  const method = (options.method ?? 'GET').toUpperCase()
+  let response = await fetch(url, { ...options, redirect: 'error', signal })
+  if (['GET', 'HEAD'].includes(method) && [502, 503, 504].includes(response.status) && !signal.aborted) {
+    void response.body?.cancel().catch(() => {})
+    response = await fetch(url, { ...options, redirect: 'error', signal })
+  }
+  return response
+}
+
+async function cfJson<T>(response: Response): Promise<T> {
+  const bytes = await readFileBytes(response.body, undefined, AbortSignal.timeout(15000), 2 * 1024 * 1024)
+  return JSON.parse(new TextDecoder().decode(bytes)) as T
+}
+
+function r2Path(bucket: string, key?: string): string {
+  if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket) || bucket.includes('..')) throw new Error('Invalid R2 bucket name.')
+  if (key !== undefined && (!key || new TextEncoder().encode(key).length > 1024 || /[\u0000-\u001f\u007f]/.test(key))) throw new Error('Invalid R2 object key.')
+  if (key?.split('/').some(segment => segment === '.' || segment === '..')) throw new Error('R2 API object keys cannot contain dot path segments.')
+  if (key?.startsWith('dashboard-files/')) throw new Error('Managed private files must use upload_file, list_files and get_file_download.')
+  return `/r2/buckets/${encodeURIComponent(bucket)}/objects${key === undefined ? '' : '/' + key.split('/').map(encodeURIComponent).join('/')}`
+}
+
 const CF_API_BASE = 'https://api.cloudflare.com/client/v4'
 
 export class CloudflareApiError extends Error {
@@ -21,10 +49,11 @@ export class CloudflareApiError extends Error {
 type CloudflareResponse<T> = {
   success: boolean
   result: T
+  result_info?: { cursor?: string; is_truncated?: boolean }
   errors: Array<{ code: number; message: string }>
 }
 
-async function cfFetch<T>(env: Env, path: string, options?: RequestInit): Promise<T> {
+async function cfFetchResponse<T>(env: Env, path: string, options?: RequestInit): Promise<CloudflareResponse<T>> {
   if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID) {
     throw new Error(
       'Cloudflare API not configured on this Worker: set CLOUDFLARE_API_TOKEN and ' +
@@ -32,7 +61,7 @@ async function cfFetch<T>(env: Env, path: string, options?: RequestInit): Promis
     )
   }
 
-  const res = await fetch(`${CF_API_BASE}/accounts/${env.CLOUDFLARE_ACCOUNT_ID}${path}`, {
+  const res = await cfRequest(`${CF_API_BASE}/accounts/${env.CLOUDFLARE_ACCOUNT_ID}${path}`, {
     ...options,
     signal: options?.signal ?? AbortSignal.timeout(15000),
     headers: {
@@ -44,7 +73,7 @@ async function cfFetch<T>(env: Env, path: string, options?: RequestInit): Promis
 
   let json: CloudflareResponse<T>
   try {
-    json = await res.json()
+    json = await cfJson(res)
   } catch {
     throw new CloudflareApiError(`Cloudflare returned a non-JSON response (${res.status})`, res.status)
   }
@@ -57,7 +86,11 @@ async function cfFetch<T>(env: Env, path: string, options?: RequestInit): Promis
     throw new CloudflareApiError(message, res.status)
   }
 
-  return json.result
+  return json
+}
+
+async function cfFetch<T>(env: Env, path: string, options?: RequestInit): Promise<T> {
+  return (await cfFetchResponse<T>(env, path, options)).result
 }
 
 // ---------------------------------------------------------------------------
@@ -70,7 +103,7 @@ async function cfFetchZone<T>(env: Env, path: string, options?: RequestInit): Pr
       'Cloudflare API not configured: set CLOUDFLARE_API_TOKEN secret with `wrangler secret put`.'
     )
   }
-  const res = await fetch(`${CF_API_BASE}${path}`, {
+  const res = await cfRequest(`${CF_API_BASE}${path}`, {
     ...options,
     headers: {
       Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
@@ -80,7 +113,7 @@ async function cfFetchZone<T>(env: Env, path: string, options?: RequestInit): Pr
   })
   let json: CloudflareResponse<T>
   try {
-    json = await res.json()
+    json = await cfJson(res)
   } catch {
     throw new CloudflareApiError(`Cloudflare returned non-JSON (${res.status})`, res.status)
   }
@@ -165,7 +198,8 @@ export async function listR2Objects(
   if (opts.cursor) params.set('cursor', opts.cursor)
 
   const qs = params.toString() ? `?${params.toString()}` : ''
-  const result = await cfFetch<any>(env, `/r2/buckets/${bucketName}/objects${qs}`)
+  const response = await cfFetchResponse<any>(env, `${r2Path(bucketName)}${qs}`)
+  const result = response.result
 
   // Normalize response shape defensively
   const objects: R2Object[] = (result?.objects ?? result?.items ?? result ?? []).map((o: any) => ({
@@ -177,9 +211,9 @@ export async function listR2Objects(
   }))
 
   return {
-    objects,
-    truncated: result?.truncated ?? false,
-    cursor: result?.cursor,
+    objects: objects.filter(object => !object.key.startsWith('dashboard-files/')),
+    truncated: response.result_info?.is_truncated ?? result?.truncated ?? false,
+    cursor: response.result_info?.cursor ?? result?.cursor,
   }
 }
 
@@ -191,19 +225,21 @@ export type R2GetResult = {
   content: string
   contentType: string
   size: number
+  encoding: 'utf8' | 'base64'
 }
 
 /**
  * GET /accounts/:account_id/r2/buckets/:bucket_name/objects/:key
  *
- * Downloads an object's content from R2. Returns raw text.
- * For binary files the content may appear garbled — use for text/JSON files.
+ * Downloads at most 1 MiB. Strict UTF-8 is the compatibility default;
+ * encoding=base64 preserves binary without lossy text conversion.
  * Requires "R2:Read" permission on the API token.
  */
 export async function getR2Object(
   env: Env,
   bucketName: string,
   key: string,
+  encoding: 'utf8' | 'base64' = 'utf8',
 ): Promise<R2GetResult> {
   if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID) {
     throw new Error(
@@ -212,9 +248,9 @@ export async function getR2Object(
   }
   const url =
     `${CF_API_BASE}/accounts/${env.CLOUDFLARE_ACCOUNT_ID}` +
-    `/r2/buckets/${bucketName}/objects/${encodeURIComponent(key)}`
+    r2Path(bucketName, key)
 
-  const res = await fetch(url, {
+  const res = await cfRequest(url, {
     headers: { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
   })
 
@@ -226,8 +262,17 @@ export async function getR2Object(
   }
 
   const contentType = res.headers.get('content-type') ?? 'application/octet-stream'
-  const content = await res.text()
-  return { content, contentType, size: new TextEncoder().encode(content).length }
+  const length = res.headers.get('content-length')
+  const bytes = await readFileBytes(res.body, length === null ? undefined : Number(length), AbortSignal.timeout(15000), MAX_INLINE_BYTES)
+  let content: string
+  if (encoding === 'base64') {
+    let binary = ''; for (let offset = 0; offset < bytes.length; offset += 8192) binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192))
+    content = btoa(binary)
+  } else {
+    try { content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes) }
+    catch { throw new Error('Object is binary. Read with encoding=base64, or use authenticated file downloads for larger files.') }
+  }
+  return { content, contentType, size: bytes.byteLength, encoding }
 }
 
 // ---------------------------------------------------------------------------
@@ -247,33 +292,40 @@ export async function putR2Object(
   content: string,
   contentType = 'text/plain; charset=utf-8',
   overwrite = false,
+  binary?: Uint8Array,
 ): Promise<void> {
-  if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID) {
-    throw new Error(
-      'Cloudflare API not configured: set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets.'
-    )
+  r2Path(bucketName, key)
+  const bytes = binary ?? new TextEncoder().encode(content)
+  if (bytes.byteLength > MAX_INLINE_BYTES) throw new Error('Inline R2 content exceeds 1 MiB. Use create_file_upload for larger private files.')
+  if (env.FILES_BUCKET && env.FILES_BUCKET_NAME === bucketName) {
+    const checksum = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), byte => byte.toString(16).padStart(2, '0')).join('')
+    const object = await env.FILES_BUCKET.put(key, bytes, { ...(!overwrite ? { onlyIf: { etagDoesNotMatch: '*' } } : {}), sha256: checksum, httpMetadata: { contentType }, customMetadata: { sha256: checksum } })
+    if (!object) throw new CloudflareApiError('Object already exists. Use a different key, or explicitly enable overwrite with confirmation.', 409)
+    const stored = await env.FILES_BUCKET.head(key)
+    if (!stored || stored.size !== bytes.byteLength || stored.etag !== object.etag) throw new Error('R2 object verification failed. Check storage before retrying.')
+    return
   }
+  // The management REST PUT schema does not promise conditional writes. Do not
+  // claim create-only protection by sending an undocumented header it may ignore.
+  if (!overwrite) throw new Error('Safe create-only writes require FILES_BUCKET and matching FILES_BUCKET_NAME. For another bucket use explicitly confirmed overwrite=true, or configure an R2 binding.')
+  if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID) throw new Error('Cloudflare API not configured.')
   const url =
     `${CF_API_BASE}/accounts/${env.CLOUDFLARE_ACCOUNT_ID}` +
-    `/r2/buckets/${bucketName}/objects/${encodeURIComponent(key)}`
+    r2Path(bucketName, key)
 
-  const res = await fetch(url, {
+  const res = await cfRequest(url, {
     method: 'PUT',
     headers: {
       Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
       'Content-Type': contentType,
-      ...(!overwrite ? { 'If-None-Match': '*' } : {}),
     },
-    body: content,
+    body: binary ?? content,
   })
 
-  if (res.status === 412 && !overwrite) {
-    throw new CloudflareApiError('Object already exists. Use a different key, or explicitly enable overwrite with confirmation.', 409)
-  }
   if (!res.ok) {
     let message = res.statusText
     try {
-      const json = (await res.json()) as CloudflareResponse<null>
+      const json = (await cfJson(res)) as CloudflareResponse<null>
       if (json.errors?.length) {
         message = json.errors.map((e) => `[${e.code}] ${e.message}`).join('; ')
       }
@@ -307,9 +359,9 @@ export async function deleteR2Object(
   }
   const url =
     `${CF_API_BASE}/accounts/${env.CLOUDFLARE_ACCOUNT_ID}` +
-    `/r2/buckets/${bucketName}/objects/${encodeURIComponent(key)}`
+    r2Path(bucketName, key)
 
-  const res = await fetch(url, {
+  const res = await cfRequest(url, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
   })
@@ -362,7 +414,7 @@ export async function kvPut(
   if (opts.expiration_ttl) params.set('expiration_ttl', String(opts.expiration_ttl))
   const qs = params.toString() ? `?${params.toString()}` : ''
 
-  const res = await fetch(
+  const res = await cfRequest(
     `${CF_API_BASE}/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces/${namespaceId}/values/${encodeURIComponent(key)}${qs}`,
     {
       method: 'PUT',
@@ -382,7 +434,7 @@ export async function kvGet(env: Env, namespaceId: string, key: string): Promise
   if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID) {
     throw new Error('Cloudflare API not configured.')
   }
-  const res = await fetch(
+  const res = await cfRequest(
     `${CF_API_BASE}/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces/${namespaceId}/values/${encodeURIComponent(key)}`,
     { headers: { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` } },
   )
@@ -395,7 +447,7 @@ export async function kvDelete(env: Env, namespaceId: string, key: string): Prom
   if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID) {
     throw new Error('Cloudflare API not configured.')
   }
-  const res = await fetch(
+  const res = await cfRequest(
     `${CF_API_BASE}/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces/${namespaceId}/values/${encodeURIComponent(key)}`,
     {
       method: 'DELETE',
@@ -427,7 +479,7 @@ export async function kvListKeys(
   if (opts.cursor) params.set('cursor', opts.cursor)
   const qs = params.toString() ? `?${params.toString()}` : ''
 
-  const res = await fetch(
+  const res = await cfRequest(
     `${CF_API_BASE}/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces/${namespaceId}/keys${qs}`,
     {
       headers: {
@@ -437,7 +489,7 @@ export async function kvListKeys(
     },
   )
   type ListResult = CloudflareResponse<KVKey[]> & { result_info?: { cursor?: string; count?: number } }
-  const json = (await res.json()) as ListResult
+  const json = (await cfJson(res)) as ListResult
   if (!res.ok || !json.success) {
     const msg = json.errors?.map((e) => `[${e.code}] ${e.message}`).join('; ') || res.statusText
     throw new CloudflareApiError(msg, res.status)
@@ -529,7 +581,7 @@ export async function d1Export(
 
   const data: Record<string, Record<string, unknown>[]> = {}
   for (const tableName of tables) {
-    const dataResult = await d1Query(env, databaseId, `SELECT * FROM "${tableName}" LIMIT 500`)
+    const dataResult = await d1Query(env, databaseId, `SELECT * FROM "${tableName.replaceAll('"', '""')}" LIMIT 500`)
     data[tableName] = (dataResult[0]?.results ?? []) as Record<string, unknown>[]
   }
   return { schema, tables, data }
@@ -805,7 +857,7 @@ const CF_GRAPHQL_URL = 'https://api.cloudflare.com/client/v4/graphql'
 
 async function cfGraphQL(env: Env, query: string): Promise<unknown> {
   if (!env.CLOUDFLARE_API_TOKEN) throw new Error('Cloudflare API not configured.')
-  const res = await fetch(CF_GRAPHQL_URL, {
+  const res = await cfRequest(CF_GRAPHQL_URL, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
@@ -813,7 +865,7 @@ async function cfGraphQL(env: Env, query: string): Promise<unknown> {
     },
     body: JSON.stringify({ query }),
   })
-  const json = (await res.json()) as { data?: unknown; errors?: Array<{ message: string }> }
+  const json = (await cfJson(res)) as { data?: unknown; errors?: Array<{ message: string }> }
   if (json.errors?.length) {
     throw new CloudflareApiError(json.errors.map((e) => e.message).join('; '), res.status)
   }
@@ -837,11 +889,11 @@ export async function getWorkerAnalytics(
 
   const query = `{
     viewer {
-      accounts(filter: { accountTag: "${env.CLOUDFLARE_ACCOUNT_ID}" }) {
+      accounts(filter: { accountTag: ${JSON.stringify(env.CLOUDFLARE_ACCOUNT_ID)} }) {
         workersInvocationsAdaptive(
           limit: 5000
           filter: {
-            scriptName: "${scriptName}"
+            scriptName: ${JSON.stringify(scriptName)}
             datetimeHour_geq: "${since.toISOString()}"
             datetimeHour_leq: "${now.toISOString()}"
           }
@@ -881,7 +933,7 @@ export async function getPagesAnalytics(
 
   const query = `{
     viewer {
-      accounts(filter: { accountTag: "${env.CLOUDFLARE_ACCOUNT_ID}" }) {
+      accounts(filter: { accountTag: ${JSON.stringify(env.CLOUDFLARE_ACCOUNT_ID)} }) {
         pagesProjectsAdaptiveGroups(
           limit: 100
           filter: {
@@ -920,7 +972,7 @@ export async function verifyCloudflareToken(env: Env, kind: 'user' | 'account') 
   if (!env.CLOUDFLARE_API_TOKEN) throw new Error('Cloudflare token is not configured.')
   if (kind === 'account' && !env.CLOUDFLARE_ACCOUNT_ID) throw new Error('Cloudflare account ID is not configured.')
   const path = kind === 'account' ? `/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/tokens/verify` : '/user/tokens/verify'
-  const response = await fetch(`${CF_API_BASE}${path}`, {
+  const response = await cfRequest(`${CF_API_BASE}${path}`, {
     headers: { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` }, signal: AbortSignal.timeout(15000),
   })
   const data = await response.json<CloudflareResponse<{ status: string; expires_on?: string; not_before?: string }>>()

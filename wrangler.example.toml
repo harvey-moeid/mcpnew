@@ -25,6 +25,12 @@ database_id = "GANTI_D1_DATABASE_ID" # GANTI_INSTALASI: UUID hasil wrangler d1 c
 migrations_dir = "migrations"
 
 [vars]
+# Must match the FILES_BUCKET bucket_name for atomic create-only admin writes.
+FILES_BUCKET_NAME = "GANTI_NAMA_BUCKET"
+# Optional exact source hosts, Cloudflare administrators and browser MCP origins.
+# FILE_UPLOAD_ALLOWED_HOSTS = "downloads.your-domain.com"
+# CLOUDFLARE_ALLOWED_USERS = "your-github-login"
+# MCP_ALLOWED_ORIGINS = "http://localhost:6274"
 GITHUB_ALLOWED_USERS = "GANTI_USERNAME_GITHUB" # GANTI_INSTALASI: akun pribadi yang boleh masuk
 PROTECTED_BRANCHES = "main,master"
 ALLOW_DIRECT_PUSH_TO_PROTECTED = "false"

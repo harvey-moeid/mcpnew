@@ -69,7 +69,10 @@ function parseStoredSkill(raw: string | null, name: string): SkillEntry | undefi
   if (!raw) return undefined
   try {
     const skill = JSON.parse(raw) as SkillEntry
-    if (skill?.name === name && typeof skill.enabled === 'boolean' && skill.source) return skill
+    if (skill?.name === name && typeof skill.enabled === 'boolean' && skill.source && typeof skill.source.owner === 'string' && REPO_PART.test(skill.source.owner) && typeof skill.source.repo === 'string' && REPO_PART.test(skill.source.repo) && typeof skill.source.ref === 'string' && typeof skill.source.path === 'string') {
+      assertSafePath(skill.source.path)
+      return skill
+    }
   } catch { /* Ignore unusable registry records, retaining checked-in defaults. */ }
   return undefined
 }
@@ -154,16 +157,45 @@ export async function readSkillFile(octokit: Octokit, skill: SkillEntry, relativ
   if (!skill.enabled) throw new Error(`Skill ${skill.name} is disabled.`)
   const { owner, repo, ref, path } = skill.source
   assertSafePath(path)
-  const response = await octokit.rest.repos.getContent({ owner, repo, path: `${path}/${relativePath}`, ref })
-  const data = response.data
-  if (Array.isArray(data) || data.type !== 'file' || !('content' in data) || data.encoding !== 'base64') {
+  const data = skill.builtIn ? (await octokit.rest.repos.getContent({ owner, repo, path: `${path}/${relativePath}`, ref })).data : await readImportedBlob(octokit, skill, relativePath)
+  if (Array.isArray(data) || data.type !== 'file' || !('content' in data) || data.encoding !== 'base64' || 'target' in data || 'submodule_git_url' in data) {
     throw new Error('Requested skill file is unavailable or is not a regular file.')
   }
   if ((data.size ?? 0) > 65536) throw new Error('Skill file is too large (64 KiB maximum).')
-  const binary = atob(data.content.replace(/\s/g, ''))
-  const decoded = new TextDecoder().decode(Uint8Array.from(binary, c => c.charCodeAt(0)))
+  const encoded = data.content.replace(/\s/g, '')
+  if (encoded.length > 4 * Math.ceil(65536 / 3)) throw new Error('Skill file exceeds the supported size.')
+  const binary = atob(encoded)
+  if (binary.length > 65536) throw new Error('Skill file exceeds the supported size.')
+  const decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(Uint8Array.from(binary, c => c.charCodeAt(0)))
+  if (decoded.includes('\0')) throw new Error('Binary skill files are not supported.')
   if (decoded.length > 65536) throw new Error('Skill file exceeds the supported size.')
   return decoded
+}
+
+// Resolve Git tree entries rather than Contents API symlink dereferencing.
+// Every parent must be a directory, and the leaf must be a regular blob.
+async function readImportedBlob(octokit: Octokit, skill: SkillEntry, relativePath: string) {
+  const { owner, repo, ref, path } = skill.source
+  const commit = await octokit.rest.repos.getCommit({ owner, repo, ref })
+  let treeSha = commit.data.commit.tree.sha
+  const segments = `${path}/${relativePath}`.split('/')
+  if (segments.length > 32) throw new Error('Skill path is too deep.')
+  for (const [index, segment] of segments.entries()) {
+    const tree = await octokit.rest.git.getTree({ owner, repo, tree_sha: treeSha })
+    if (tree.data.truncated) throw new Error('Skill source directory is too large to validate safely.')
+    const entry = tree.data.tree.find(entry => entry.path === segment)
+    if (!entry?.sha) throw new Error('Requested skill file is unavailable.')
+    if (index < segments.length - 1) {
+      if (entry.type !== 'tree' || entry.mode !== '040000') throw new Error('Skill paths cannot traverse symlinks or submodules.')
+      treeSha = entry.sha
+    } else {
+      if (entry.type !== 'blob' || !['100644', '100755'].includes(entry.mode ?? '')) throw new Error('Skill file must be a regular file, not a symlink or submodule.')
+      if ((entry.size ?? 0) > 65536) throw new Error('Skill file is too large (64 KiB maximum).')
+      const blob = (await octokit.rest.git.getBlob({ owner, repo, file_sha: entry.sha })).data
+      return { ...blob, type: 'file' as const }
+    }
+  }
+  throw new Error('Requested skill file is unavailable.')
 }
 
 export async function installSkillFromGitHub(
@@ -178,9 +210,12 @@ export async function installSkillFromGitHub(
   if (ref.length > 100 || !/^[A-Za-z0-9_./-]+$/.test(ref) || ref.includes('..')) {
     throw new Error('Invalid Git ref.')
   }
+  const commit = await octokit.rest.repos.getCommit({ owner: input.owner, repo: input.repo, ref })
+  const pinnedRef = commit.data.sha
+  if (!/^[a-f0-9]{40}$/i.test(pinnedRef)) throw new Error('Cannot resolve skill source to an immutable commit.')
   const provisional: SkillEntry = {
     name: 'candidate', description: '', builtIn: false, enabled: true,
-    source: { owner: input.owner, repo: input.repo, path: input.path, ref },
+    source: { owner: input.owner, repo: input.repo, path: input.path, ref: pinnedRef },
   }
   const markdown = await readSkillFile(octokit, provisional)
   const manifest = parseSkillHeader(markdown)

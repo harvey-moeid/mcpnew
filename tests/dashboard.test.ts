@@ -262,6 +262,7 @@ function fileStorage(env: Env) {
       objects.set(key, stored)
       return object(key, stored)
     },
+    async head(key: string) { const stored = objects.get(key); return stored ? object(key, stored) : null },
     async get(key: string) {
       gets.push(key)
       const stored = objects.get(key)

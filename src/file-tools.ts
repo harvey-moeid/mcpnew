@@ -4,8 +4,10 @@ import { z } from 'zod'
 import { withErrorHandling } from './error-handling'
 import { assertFileUploadReady, activeFile, queueFileCleanup, statesFor, fileUsagePage, TRASH_RETENTION_MS, setFileProject, trashFile, restoreFile, createFileShare, listFileShares, revokeFileShare, validProject } from './file-management'
 import { withAudit } from './audit-log'
-import { createUploadTicket } from './file-transfers'
+import { cancelUpload, createUploadTicket } from './file-transfers'
 import { MAX_FILE_BYTES, MAX_INLINE_BYTES, filePrefix, newFileKey, ownedFileKey, fileInfo, privateFileLinks, requireFileAccess } from './files'
+
+import { allowedUploadUrl, fetchUploadBytes, decodeFileBase64, storeFileBytes } from './file-content'
 
 const result = (value: unknown): CallToolResult => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] })
 const filename = z.string().min(1).max(255).describe('Original filename, without folder paths')
@@ -15,21 +17,19 @@ export function registerFileTools(server: McpServer, env: Env, login: string, ct
     withAudit(env.AUDIT_DB, login, name, () => 'Private file operation', withErrorHandling(handler))
 
   server.registerTool('upload_file', {
-    description: 'Upload a small binary file (PDF, ZIP, image, etc.) as strict base64 to your private dashboard R2 storage. Maximum decoded size 1 MiB. For larger workspace files use create_file_upload then send local file bytes to the returned upload URL. Returns a private download URL requiring your dashboard login. The server cannot read a local workspace path.',
-    inputSchema: { filename, content_base64: z.string().max(4 * Math.ceil(MAX_INLINE_BYTES / 3)).describe('Standard padded base64, not a data URL') },
+    description: 'Upload a small binary file (PDF, ZIP, image, etc.) as strict base64 to your private dashboard R2 storage. Maximum decoded size 1 MiB. Alternatively provide source_url on FILE_UPLOAD_ALLOWED_HOSTS (HTTPS, no redirects, up to 25 MiB). For larger workspace files use create_file_upload then send local file bytes to the returned upload URL. Returns a private download URL requiring your dashboard login. The server cannot read a local workspace path.',
+    inputSchema: { filename, content_base64: z.string().max(4 * Math.ceil(MAX_INLINE_BYTES / 3)).optional().describe('Standard padded base64 up to 1 MiB; provide this OR source_url'), source_url: z.string().max(4096).optional().describe('HTTPS URL on an administrator allowed hostname, up to 25 MiB; redirects forbidden') },
     annotations: { title: 'Upload private file', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, write('upload_file', async ({ filename, content_base64 }) => {
+  }, write('upload_file', async ({ filename, content_base64, source_url }) => {
     const bucket = requireFileAccess(env, login)
     const key = newFileKey(login, filename)
-    if (content_base64.length > 4 * Math.ceil(MAX_INLINE_BYTES / 3) || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(content_base64)) throw new Error('Invalid base64 or file exceeds 1 MiB. Use create_file_upload for larger files.')
-    const decoded = atob(content_base64)
-    if (decoded.length > MAX_INLINE_BYTES || btoa(decoded) !== content_base64) throw new Error('Invalid base64 or file exceeds 1 MiB.')
+    if ((content_base64 === undefined) === (source_url === undefined)) throw new Error('Provide exactly one of content_base64 or source_url. Local paths are not supported.')
+    const source = source_url === undefined ? undefined : allowedUploadUrl(source_url, env.FILE_UPLOAD_ALLOWED_HOSTS ?? '')
     await assertFileUploadReady(env, login, key)
-    let object: R2Object
-    try { object = await bucket.put(key, Uint8Array.from(decoded, char => char.charCodeAt(0)), {
-      httpMetadata: { contentType: 'application/octet-stream' }, customMetadata: { filename },
-    }) } catch { throw new Error('File storage is unavailable. Check the file list before retrying.') }
-    return result({ file: fileInfo(object), ...privateFileLinks(key) })
+    const bytes = source ? await fetchUploadBytes(source) : decodeFileBase64(content_base64!, MAX_INLINE_BYTES)
+    requireFileAccess(env, login)
+    const object = await storeFileBytes(bucket, key, filename, bytes)
+    return result({ file: fileInfo(object), verified: true, ...privateFileLinks(key) })
   }))
 
   server.registerTool('create_file_upload', {
@@ -40,6 +40,12 @@ export function registerFileTools(server: McpServer, env: Env, login: string, ct
     requireFileAccess(env, login)
     return result(await createUploadTicket(env, login, filename, size))
   }))
+
+  server.registerTool('cancel_file_upload', {
+    description: 'Cancel a pending or in-progress upload by uploadId from create_file_upload. Cannot delete completed files. Cancellation prevents completion even if bytes are still being sent.',
+    inputSchema: { upload_id: z.string().uuid() },
+    annotations: { title: 'Cancel private upload', readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  }, write('cancel_file_upload', async ({ upload_id }) => result(await cancelUpload(env, login, upload_id))))
 
   server.registerTool('list_files', {
     description: 'List your private dashboard files, including files uploaded through MCP. Returns metadata and download URLs requiring your dashboard login. Supports trash and project filters. Follow cursor until null; filtered pages may be empty.',

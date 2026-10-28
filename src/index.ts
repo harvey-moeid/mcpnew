@@ -1,3 +1,4 @@
+import { rejectMcpRequest } from './mcp-boundary'
 import { purgeExpiredFiles } from './file-management'
 import OAuthProvider from '@cloudflare/workers-oauth-provider'
 import { GitHubHandler } from './github-handler'
@@ -22,6 +23,6 @@ const provider = new OAuthProvider<Env>({
 
 
 export default {
-  fetch(request: Request, env: Env, ctx: ExecutionContext) { return provider.fetch(request, env, ctx) },
+  fetch(request: Request, env: Env, ctx: ExecutionContext) { return rejectMcpRequest(request, env) ?? provider.fetch(request, env, ctx) },
   async scheduled(_event: ScheduledController, env: Env) { await purgeExpiredFiles(env) },
 }

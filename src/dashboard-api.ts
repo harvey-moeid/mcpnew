@@ -1,3 +1,4 @@
+import { connectionHealth } from './connection-health'
 import { Hono } from 'hono'
 import { dashboardFiles } from './dashboard-files'
 import { readSession, destroySession, sameOrigin, type DashboardSession } from './dashboard-auth'
@@ -53,6 +54,8 @@ dashboardApi.get('/session', c => {
       directPushAllowed: c.env.ALLOW_DIRECT_PUSH_TO_PROTECTED === 'true',
       endpoint: `${new URL(c.req.url).origin}/mcp`, worker: installation.workerName } })
 })
+
+dashboardApi.get('/health', async c => c.json(await connectionHealth(c.env, c.get('session').login, c.get('session').accessToken)))
 
 dashboardApi.post('/logout', async c => {
   if (!sameOrigin(c.req.raw)) return c.json({ error: 'Permintaan tidak valid.' }, 403)

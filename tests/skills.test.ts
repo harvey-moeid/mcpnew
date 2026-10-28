@@ -15,8 +15,22 @@ function mockKV() {
   }
 }
 const manifest = '---\nname: custom-byga-skill\ndescription: "A custom test skill"\n---\n# Custom Skill\nUse only with user permission.\n'
+function importedGitData(content = manifest, mode = '100644') {
+  return {
+    repos: { async getCommit() { return { data: { sha: 'a'.repeat(40), commit: { tree: { sha: 'root' } } } } } },
+    git: {
+      async getTree({ tree_sha }: { tree_sha: string }) {
+        const entries = tree_sha === 'root' ? [{ path: 'skills', sha: 'skills', mode: '040000', type: 'tree' }, { path: 'skill', sha: 'skill', mode: '040000', type: 'tree' }] :
+          tree_sha === 'skills' ? [{ path: 'custom-byga-skill', sha: 'skill', mode: '040000', type: 'tree' }] :
+          [{ path: 'SKILL.md', sha: 'blob', mode, type: 'blob', size: Buffer.byteLength(content) }]
+        return { data: { tree: entries } }
+      },
+      async getBlob() { return { data: { encoding: 'base64', size: Buffer.byteLength(content), content: Buffer.from(content).toString('base64') } } },
+    },
+  }
+}
 const mockGitHub = {
-  rest: { repos: { async getContent({ path }: { path: string }) {
+  rest: { ...importedGitData(), repos: { ...importedGitData().repos, async getContent({ path }: { path: string }) {
     return { data: { type: 'file', encoding: 'base64', size: manifest.length,
       content: Buffer.from(path.endsWith('SKILL.md') ? manifest : '# Reference').toString('base64') } }
   } } },
@@ -140,8 +154,20 @@ test('rejects replacing canonical or legacy built-ins and invalid sources', asyn
   const kv = mockKV()
   for (const name of [...BUILTIN_SKILLS.map(x => x.name), ...Object.keys(legacyNames)]) {
     const original = manifest.replace('custom-byga-skill', name)
-    const gh = { rest: { repos: { async getContent() { return { data: { type: 'file', encoding: 'base64', size: original.length, content: Buffer.from(original).toString('base64') } } } } } }
+    const gh = { rest: importedGitData(original) }
     await assert.rejects(() => installSkillFromGitHub(gh as any, kv as any, 'actor', { owner: 'a', repo: 'b', path: 'skill' }), /built in/)
     await assert.rejects(() => installSkillFromGitHub(gh as any, kv as any, 'actor', { owner: 'a', repo: 'b', path: '../skill' }), /Invalid/)
   }
+})
+
+
+test('new external skills pin immutable commits and reject symlinks and binary instructions', async () => {
+  const kv = mockKV()
+  const installed = await installSkillFromGitHub(mockGitHub as any, kv as any, 'actor', { owner: 'owner', repo: 'repo', path: 'skills/custom-byga-skill', ref: 'main' })
+  assert.equal(installed.source.ref, 'a'.repeat(40))
+  for (const mode of ['120000', '160000']) {
+    await assert.rejects(() => installSkillFromGitHub({ rest: importedGitData(manifest, mode) } as any, mockKV() as any, 'actor', { owner: 'owner', repo: 'repo', path: 'skill' }), /regular file/)
+  }
+  await assert.rejects(() => installSkillFromGitHub({ rest: importedGitData(manifest + '\0binary') } as any, mockKV() as any, 'actor', { owner: 'owner', repo: 'repo', path: 'skill' }), /Binary/)
+  await assert.rejects(() => readSkillFile({ rest: importedGitData('x'.repeat(65537)) } as any, installed), /too large/)
 })

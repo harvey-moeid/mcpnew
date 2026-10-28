@@ -1,5 +1,8 @@
 import { Hono } from 'hono'
 import { assertFileUploadReady, FileActionError, queueFileCleanup, fileUsagePage, statesFor, readFileState, setFileProject, trashFile, restoreFile, createFileShare, listFileShares, revokeFileShare, TRASH_RETENTION_MS } from './file-management'
+import { recordFileEvent } from './file-audit'
+import { FileContentError, readFileBytes, storeFileBytes } from './file-content'
+import { createUploadTicket, cancelUpload } from './file-transfers'
 import { sameOrigin, type DashboardSession } from './dashboard-auth'
 
 import { MAX_FILE_BYTES, filePrefix as prefix, validFileName as validName, fileInfo, fileDownload, ownedFileKey } from './files'
@@ -7,7 +10,7 @@ import { MAX_FILE_BYTES, filePrefix as prefix, validFileName as validName, fileI
 // Mounted after the dashboard's session middleware. Never expose this router publicly.
 export const dashboardFiles = new Hono<{ Bindings: Env; Variables: { session: DashboardSession } }>()
 
-dashboardFiles.onError((error, c) => error instanceof FileActionError ? c.json({ error: error.message }, error.status) : c.json({ error: 'Penyimpanan R2 belum dapat diakses. Periksa migrasi database atau coba lagi nanti.' }, 503))
+dashboardFiles.onError((error, c) => error instanceof FileActionError || error instanceof FileContentError ? c.json({ error: error.message }, error.status) : c.json({ error: 'Penyimpanan R2 belum dapat diakses. Periksa migrasi database atau coba lagi nanti.' }, 503))
 
 dashboardFiles.get('/', async c => {
   if (!c.env.FILES_BUCKET) return c.json({ configured: false, files: [], cursor: null, maxFileBytes: MAX_FILE_BYTES })
@@ -38,12 +41,22 @@ dashboardFiles.post('/', async c => {
   if (size > 0 && !c.req.raw.body) return c.json({ error: 'Isi file tidak tersedia.' }, 400)
   const key = prefix(c.get('session').login) + crypto.randomUUID() + '/' + name
   await assertFileUploadReady(c.env, c.get('session').login, key)
-  // Pass the length-delimited request directly to R2; do not buffer files in Worker memory.
-  const object = await c.env.FILES_BUCKET.put(key, c.req.raw.body, {
-    httpMetadata: { contentType: 'application/octet-stream' },
-    customMetadata: { filename: name },
-  })
-  return c.json({ file: fileInfo(object) }, 201)
+  const bytes = await readFileBytes(c.req.raw.body, size, AbortSignal.any([c.req.raw.signal, AbortSignal.timeout(60000)]))
+  const object = await storeFileBytes(c.env.FILES_BUCKET, key, name, bytes)
+  await recordFileEvent(c.env, c.get('session').login, 'dashboard_upload_file', `Stored verified file (${object.size} bytes)`)
+  return c.json({ file: fileInfo(object), verified: true }, 201)
+})
+
+dashboardFiles.post('/uploads', async c => {
+  if (!sameOrigin(c.req.raw)) return c.json({ error: 'Permintaan tidak valid.' }, 403)
+  let body: { filename?: unknown; size?: unknown }
+  try { body = await c.req.json() } catch { return c.json({ error: 'Data tidak valid.' }, 400) }
+  if (typeof body.filename !== 'string' || !validName(body.filename) || typeof body.size !== 'number') return c.json({ error: 'Nama dan ukuran file diperlukan.' }, 400)
+  return c.json(await createUploadTicket(c.env, c.get('session').login, body.filename, body.size), 201)
+})
+dashboardFiles.post('/uploads/:id/cancel', async c => {
+  if (!sameOrigin(c.req.raw)) return c.json({ error: 'Permintaan tidak valid.' }, 403)
+  return c.json(await cancelUpload(c.env, c.get('session').login, c.req.param('id')))
 })
 
 dashboardFiles.get('/download', async c => {
@@ -63,6 +76,7 @@ dashboardFiles.use('/manage/*', async (c, next) => {
   if (c.req.method !== 'GET' && !sameOrigin(c.req.raw)) return c.json({ error: 'Permintaan tidak valid.' }, 403)
   if (!c.env.FILES_BUCKET) return c.json({ error: 'Penyimpanan belum dikonfigurasi.' }, 503)
   await next()
+  if (c.req.method !== 'GET') await recordFileEvent(c.env, c.get('session').login, 'dashboard_file_manage', 'File management request: ' + c.req.path.split('/').pop(), c.res.status >= 400)
 })
 dashboardFiles.post('/manage/:action', async c => {
   let body: { key?: unknown; project?: unknown; hours?: unknown; id?: unknown }
