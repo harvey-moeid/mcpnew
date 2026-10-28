@@ -120,7 +120,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     const octokit = this.octokit()
     const props = this.props as GitHubProps
     const audit = this.env.AUDIT_DB
-    registerFileTools(this.server, this.env, props.login)
+    registerFileTools(this.server, this.env, props.login, this.ctx)
 
     const writeTool = <Args>(
       toolName: string,

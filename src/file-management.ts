@@ -85,11 +85,11 @@ export async function sharedFileKey(env: Env, token: string) {
 }
 
 // Mark before deleting bytes so a concurrent restore cannot revive a file being purged.
-// Bounded batches keep scheduled work predictable; the next hour handles any backlog.
+// Small batches also fit request-triggered background work on Workers Free.
 export async function purgeExpiredFiles(env: Env) {
   if (!env.FILES_BUCKET) return 0
   const cutoff = Date.now() - TRASH_RETENTION_MS
-  const rows = await env.AUDIT_DB.prepare('SELECT actor, key FROM dashboard_file_state WHERE deleted_at <= ? AND purging != 2 ORDER BY deleted_at LIMIT 100')
+  const rows = await env.AUDIT_DB.prepare('SELECT actor, key FROM dashboard_file_state WHERE deleted_at <= ? AND purging != 2 ORDER BY deleted_at LIMIT 10')
     .bind(cutoff).all<{ actor: string; key: string }>()
   let count = 0
   for (const row of rows.results) {
@@ -118,4 +118,20 @@ export async function fileUsagePage(env: Env, login: string, cursor?: string) {
     else { totals.activeCount++; totals.activeBytes += object.size }
   }
   return { ...totals, cursor: page.truncated ? page.cursor : null }
+}
+
+
+/** Background cleanup on authenticated file listing; no additional Cron Trigger needed.
+ * KV throttling is best-effort, not a lock. Concurrent cleanup is safe to retry.
+ */
+export function queueFileCleanup(env: Env, ctx?: { waitUntil(promise: Promise<unknown>): void }) {
+  if (!env.FILES_BUCKET || !ctx || typeof ctx.waitUntil !== 'function') return
+  ctx.waitUntil((async () => {
+    const marker = 'file-cleanup:last-attempt'
+    const last = Number(await env.OAUTH_KV.get(marker) ?? 0)
+    if (Number.isFinite(last) && Date.now() - last < 3600000) return
+    // Back off failed attempts too, rather than retrying on every file-list request.
+    await env.OAUTH_KV.put(marker, String(Date.now()), { expirationTtl: 3600 })
+    await purgeExpiredFiles(env)
+  })().catch(() => { console.error('Background file cleanup failed; retry on a later authenticated file listing.') }))
 }

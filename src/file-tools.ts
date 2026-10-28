@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import { withErrorHandling } from './error-handling'
-import { activeFile, statesFor, fileUsagePage, TRASH_RETENTION_MS, setFileProject, trashFile, restoreFile, createFileShare, listFileShares, revokeFileShare, validProject } from './file-management'
+import { activeFile, queueFileCleanup, statesFor, fileUsagePage, TRASH_RETENTION_MS, setFileProject, trashFile, restoreFile, createFileShare, listFileShares, revokeFileShare, validProject } from './file-management'
 import { withAudit } from './audit-log'
 import { createUploadTicket } from './file-transfers'
 import { MAX_FILE_BYTES, MAX_INLINE_BYTES, filePrefix, newFileKey, ownedFileKey, fileInfo, privateFileLinks, requireFileAccess } from './files'
@@ -10,7 +10,7 @@ import { MAX_FILE_BYTES, MAX_INLINE_BYTES, filePrefix, newFileKey, ownedFileKey,
 const result = (value: unknown): CallToolResult => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] })
 const filename = z.string().min(1).max(255).describe('Original filename, without folder paths')
 
-export function registerFileTools(server: McpServer, env: Env, login: string) {
+export function registerFileTools(server: McpServer, env: Env, login: string, ctx?: { waitUntil(promise: Promise<unknown>): void }) {
   const write = <Args>(name: string, handler: (args: Args) => Promise<CallToolResult>) =>
     withAudit(env.AUDIT_DB, login, name, () => 'Private file operation', withErrorHandling(handler))
 
@@ -48,6 +48,7 @@ export function registerFileTools(server: McpServer, env: Env, login: string) {
     const bucket = requireFileAccess(env, login)
     const listed = await bucket.list({ prefix: filePrefix(login), limit: 50, cursor, include: ['customMetadata', 'httpMetadata'] })
     const states = await statesFor(env, login, listed.objects.map(object => object.key))
+    queueFileCleanup(env, ctx)
     return result({ files: listed.objects.filter(object => Boolean(states.get(object.key)?.deleted_at != null) === Boolean(trash) && states.get(object.key)?.purging !== 2 && (!project || states.get(object.key)?.project === project)).map(object => { const state = states.get(object.key); return { ...fileInfo(object), project: state?.project ?? '', deletedAt: state?.deleted_at ?? null, restoreUntil: state?.deleted_at != null ? state.deleted_at + TRASH_RETENTION_MS : null, ...(!trash ? privateFileLinks(object.key) : {}) } }), cursor: listed.truncated ? listed.cursor : null })
   }))
 
