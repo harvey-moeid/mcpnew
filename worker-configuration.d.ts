@@ -4,6 +4,10 @@ interface Env {
   OAUTH_KV: KVNamespace
   AUDIT_DB: D1Database
   FILES_BUCKET?: R2Bucket
+  FILES_BUCKET_NAME?: string
+  MCP_ALLOWED_ORIGINS?: string
+  FILE_UPLOAD_ALLOWED_HOSTS?: string
+  CLOUDFLARE_ALLOWED_USERS?: string
   OAUTH_PROVIDER: import('@cloudflare/workers-oauth-provider').OAuthHelpers
   GITHUB_CLIENT_ID: string
   GITHUB_CLIENT_SECRET: string

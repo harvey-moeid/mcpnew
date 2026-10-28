@@ -128,9 +128,10 @@ test('page selectors reach GitHub list API and audit reads are scoped to the act
 test('MCP uploads binary files to owner dashboard storage and returns login-only URLs', async () => {
   const { tools, env, audit } = await setup()
   const writes: { key: string; bytes: Uint8Array; options: R2PutOptions }[] = []
-  env.FILES_BUCKET = { async put(key: string, bytes: Uint8Array, options: R2PutOptions) {
+  let lastObject: unknown
+  env.FILES_BUCKET = { async head() { return lastObject }, async put(key: string, bytes: Uint8Array, options: R2PutOptions) {
     writes.push({ key, bytes, options })
-    return { key, size: bytes.length, uploaded: new Date(), customMetadata: options.customMetadata }
+    lastObject = { key, size: bytes.length, uploaded: new Date(), customMetadata: options.customMetadata }; return lastObject
   } }
   const bytes = new Uint8Array([0, 255, 128, 1])
   const content_base64 = Buffer.from(bytes).toString('base64')
@@ -212,23 +213,28 @@ test('all administrative R2 tools recheck revoked or empty allowlists in an esta
     for (const [name, args] of calls) {
       const result = await tools.get(name).handler(args)
       assert.equal(result.isError, true, name)
-      assert.match(result.content[0].text, /R2 access denied/, name)
+      assert.match(result.content[0].text, /access denied/i, name)
     }
   }
   assert.equal(fetch.mock.callCount(), 0)
   env.GITHUB_ALLOWED_USERS = ' ACTOR '
-  assert.ok(!(await tools.get('put_r2_object').handler({ bucket: 'files', key: 'report.txt', content: 'x' })).isError)
+  assert.ok(!(await tools.get('put_r2_object').handler({ bucket: 'files', key: 'report.txt', content: 'x', overwrite: true, confirm: 'files:report.txt' })).isError)
   assert.equal(fetch.mock.callCount(), 1)
 })
 
-test('R2 text creation preserves existing bytes and overwrite requires explicit target confirmation', async t => {
-  let stored: string | undefined
-  const fetch = t.mock.method(globalThis, 'fetch', async (_url: string, options: RequestInit) => {
-    if (new Headers(options.headers).get('If-None-Match') === '*' && stored !== undefined) return new Response(null, { status: 412 })
-    stored = options.body as string
-    return new Response(null, { status: 200 })
-  })
-  const { tools } = await setup()
+test('R2 bound creation preserves existing bytes and overwrite requires explicit target confirmation', async () => {
+  let stored: string | undefined, putCalls = 0, object: any
+  const { tools, env } = await setup()
+  env.FILES_BUCKET_NAME = 'files'
+  env.FILES_BUCKET = {
+    async put(key: string, bytes: Uint8Array, options: R2PutOptions) {
+      putCalls++
+      if (options.onlyIf && stored !== undefined) return null
+      stored = new TextDecoder().decode(bytes)
+      object = { key, size: bytes.length, etag: 'etag', uploaded: new Date() }
+      return object
+    }, async head() { return object },
+  }
   const tool = tools.get('put_r2_object')
   const args = { bucket: 'files', key: 'config.json', content: 'original', content_type: 'application/json' }
   assert.equal(tool.config.inputSchema.overwrite.parse(undefined), false)
@@ -243,11 +249,11 @@ test('R2 text creation preserves existing bytes and overwrite requires explicit 
     assert.equal(denied.isError, true)
     assert.match(denied.content[0].text, /Confirmation required/)
   }
-  assert.equal(fetch.mock.callCount(), 2)
+  assert.equal(putCalls, 2)
   const replaced = await tool.handler({ ...args, content: 'replacement', overwrite: true, confirm: 'files:config.json' })
   assert.ok(!replaced.isError)
   assert.equal(stored, 'replacement')
-  assert.equal(fetch.mock.callCount(), 3)
+  assert.equal(putCalls, 3)
 })
 
 test('database failure prevents inline R2 writes and ticket creation without leaking provider errors', async t => {
@@ -270,4 +276,104 @@ test('database failure prevents inline R2 writes and ticket creation without lea
   }
   assert.equal(writes, 0)
   assert.equal([...values.keys()].filter(key => key.startsWith('file-upload:')).length, 0)
+})
+
+test('every registered tool rejects revoked sessions, including GitHub, skills and shared Cloudflare tools', async () => {
+  const { tools, env } = await setup()
+  env.GITHUB_ALLOWED_USERS = 'someone-else'
+  for (const [name, tool] of tools) {
+    const response = await tool.handler({})
+    assert.equal(response.isError, true, name)
+    assert.match(response.content[0].text, /Access denied/, name)
+  }
+})
+
+test('Cloudflare administrator restriction preserves per-user GitHub and private file access', async () => {
+  const { tools, env } = await setup({ users: { async getAuthenticated() { return { data: { login: 'actor' } } } } })
+  env.CLOUDFLARE_ALLOWED_USERS = 'another-admin'
+  const denied = await tools.get('worker_list').handler({})
+  assert.equal(denied.isError, true)
+  assert.match(denied.content[0].text, /administration denied/)
+  assert.ok(!(await tools.get('whoami').handler({})).isError)
+})
+
+test('GitHub review pins the reviewed head and requires exact target confirmation', async () => {
+  let writes = 0
+  const { tools } = await setup({ pulls: {
+    async get() { return { data: { head: { sha } } } },
+    async createReview(args: any) { writes++; assert.equal(args.commit_id, sha); return { data: { id: 1, state: 'APPROVED', commit_id: sha } } },
+  } })
+  const tool = tools.get('create_pull_request_review')
+  const args = { owner: 'owner', repo: 'repo', pull_number: 2, expected_head_sha: sha, body: 'Reviewed', event: 'APPROVE', confirm: 'owner/repo#2' }
+  assert.equal((await tool.handler({ ...args, confirm: 'owner/repo#3' })).isError, true)
+  assert.equal((await tool.handler({ ...args, expected_head_sha: 'b'.repeat(40) })).isError, true)
+  assert.ok(!(await tool.handler(args)).isError)
+  assert.equal(writes, 1)
+})
+
+test('GitHub job, release, search and deployment tools return paginated structured metadata', async () => {
+  const { tools } = await setup({
+    search: { async repos(args: any) { assert.equal(args.page, 2); return { data: { total_count: 8, incomplete_results: false, items: [{ full_name: 'owner/repo', private: true }] } } } },
+    actions: { async listJobsForWorkflowRun() { return { data: { total_count: 1, jobs: [{ id: 10, name: 'build', status: 'completed', conclusion: 'failure', steps: [{ name: 'test', number: 2, status: 'completed', conclusion: 'failure' }] }] } } } },
+    repos: { async listReleases() { return { data: [{ id: 5, tag_name: 'v1', draft: true, assets: [] }] } }, async listDeployments() { return { data: [{ id: 6, sha, environment: 'preview' }] } }, async listDeploymentStatuses() { return { data: [{ id: 7, state: 'success' }] } } },
+  })
+  const args = { owner: 'owner', repo: 'repo', page: 2, per_page: 1 }
+  const search = await tools.get('search_repositories').handler({ query: 'mcp', page: 2, per_page: 1 })
+  assert.equal(search.structuredContent.next_page, 3)
+  const jobs = await tools.get('get_workflow_jobs').handler({ ...args, run_id: 3 })
+  assert.equal(jobs.structuredContent.jobs[0].steps[0].conclusion, 'failure')
+  assert.equal((await tools.get('list_releases').handler(args)).structuredContent.releases[0].draft, true)
+  assert.equal((await tools.get('list_deployments').handler(args)).structuredContent.deployments[0].environment, 'preview')
+  assert.equal((await tools.get('get_deployment_statuses').handler({ ...args, deployment_id: 6 })).structuredContent.statuses[0].state, 'success')
+})
+
+test('GitHub log downloads never forward OAuth to storage and redact reflected account secrets', async t => {
+  const calls: Array<{ url: string; options: RequestInit }> = []
+  t.mock.method(globalThis, 'fetch', async (url: string, options: RequestInit) => {
+    calls.push({ url, options })
+    return calls.length === 1 ? new Response(null, { status: 302, headers: { Location: 'https://logs.blob.core.windows.net/run/job.txt?sig=temporary' } }) : new Response('failure private-github-token private-cloudflare-token')
+  })
+  const { tools } = await setup()
+  const response = await tools.get('get_workflow_job_logs').handler({ owner: 'owner', repo: 'repo', job_id: 10 })
+  assert.ok(!response.isError)
+  assert.equal(new Headers(calls[0].options.headers).get('Authorization'), 'Bearer private-github-token')
+  assert.equal(new Headers(calls[1].options.headers).has('Authorization'), false)
+  assert.equal(calls[1].options.redirect, 'error')
+  assert.ok(!JSON.stringify(response).includes('private-github-token'))
+  assert.ok(!JSON.stringify(response).includes('private-cloudflare-token'))
+})
+
+test('binary rename reuses the original blob and cannot overwrite an existing destination', async () => {
+  let collision = false, tree: any, updates = 0
+  const { tools } = await setup({
+    repos: { async getContent({ path, ref }: any) {
+      assert.equal(ref, sha)
+      if (path === 'new.zip') { if (collision) return { data: { type: 'file' } }; throw { status: 404 } }
+      return { data: { type: 'file', sha: 'binary-blob', content: 'AP+A' } }
+    } },
+    git: {
+      async getRef() { return { data: { object: { sha } } } }, async getCommit() { return { data: { tree: { sha: 'tree' } } } },
+      async createTree(args: any) { tree = args.tree; return { data: { sha: 'new-tree' } } },
+      async createCommit() { return { data: { sha: 'new-commit' } } },
+      async updateRef(args: any) { updates++; assert.equal(args.force, false) },
+      async createBlob() { throw new Error('Binary contents must never be reencoded') },
+    },
+  })
+  const args = { owner: 'owner', repo: 'repo', branch: 'feature', old_path: 'old.zip', new_path: 'new.zip' }
+  assert.ok(!(await tools.get('rename_file').handler(args)).isError)
+  assert.equal(tree[0].sha, 'binary-blob')
+  assert.equal(updates, 1)
+  collision = true
+  assert.equal((await tools.get('rename_file').handler(args)).isError, true)
+  assert.equal(updates, 1)
+})
+
+test('redaction preserves valid structured results even when configured secrets contain JSON escapes', async () => {
+  const { tools, env, values } = await setup()
+  env.CLOUDFLARE_API_TOKEN = 'a-secret-with-"quotes\\and-slash'
+  values.set('note:actor:test', JSON.stringify({ content: 'reflected ' + env.CLOUDFLARE_API_TOKEN, updated_at: '', actor: 'actor' }))
+  const result = await tools.get('get_note').handler({ name: 'test' })
+  assert.ok(!result.isError)
+  assert.match(result.content[0].text, /\[REDACTED\]/)
+  assert.ok(!JSON.stringify(result).includes('quotes'))
 })

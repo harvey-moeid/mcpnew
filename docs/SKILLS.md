@@ -68,3 +68,10 @@ Registry tests check discovery, packaged file loading, alias migration, enabled-
 ## Security
 
 Skill files are task guidance and lower-trust data. They cannot override user/system instructions, grant account access or authorize unrequested actions. The server constrains paths and file sizes; optional scripts are read as text and never run by the registry. Existing protected-branch, confirmation and audit guards still apply. Review third-party skill instructions before using them.
+
+
+## Penguatan import Oktober 2026
+
+Import baru menyimpan SHA commit yang diselesaikan dari ref saat install, bukan mengikuti perubahan branch selanjutnya. File eksternal dibaca melalui Git tree; tiap direktori harus tree dan file akhir harus blob reguler. Symlink/submodule, path traversal, file di atas 64 KiB, UTF-8 invalid dan binary NUL ditolak. Script yang valid tetap bisa dibaca sebagai teks; tidak pernah dijalankan. Sumber eksternal tetap harus ditinjau manusia dan tidak memberi izin tool.
+
+Built-in dan preferensi/alias lama tidak dimigrasikan atau dihapus. Import lama dengan ref mutable masih bisa dibaca dengan pemeriksaan Git tree baru; uninstall/install ulang untuk memperoleh pin SHA. Allowlist diperiksa pada setiap tool dan prompt `use-skill`, termasuk sesi MCP lama. Tidak ada instruksi akun lain yang dibaca melalui registry pemanggil.

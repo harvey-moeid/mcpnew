@@ -1,5 +1,14 @@
 # BYGA MCP
 
+## Upgrade keamanan dan transfer (Oktober 2026)
+
+Upload file sekarang memvalidasi byte aktual, checksum SHA-256 native R2 dan HEAD sebelum melaporkan sukses. Batas tetap **1 MiB base64** dan **25 MiB tiket/dashboard/URL HTTPS yang diizinkan**. Dashboard mendukung drag-and-drop, progress, cancel server dan health check saat diminta. Tidak ada akses otomatis ke file lokal pengguna.
+
+Terapkan migration **0003_upload_sessions.sql sebelum rilis**; tiket lama tetap berlaku sampai expiry, tanpa mengganti grant OAuth atau encryption key. `FILES_BUCKET_NAME` harus cocok dengan binding untuk `put_r2_object` create-only; bucket lain memerlukan overwrite dengan konfirmasi target eksplisit. Prefix file privat hanya dapat diakses melalui tool file pemilik. Import skill baru dipin commit dan menolak symlink; seluruh skill BYGA lama dipertahankan.
+
+Tool GitHub tambahan: search repo, commit/check status, jobs/log Actions, review PR dengan SHA head, security metadata, releases dan deployment tracking. Write tidak di-retry otomatis. Lihat [audit dan inventaris](docs/UPGRADE-2026-10.md), [konfigurasi/rilis](docs/DEPLOY-UPGRADE-2026-10.md), [hasil tes aktual](docs/VALIDATION-2026-10.md), serta [kontrak file](docs/FILE-R2-DASHBOARD.md). Keberhasilan uji workerd lokal tidak berarti keempat UI client atau akun production telah diuji.
+
+
 Untuk instalasi baru/pindah akun, mulai dari [BACA-DULU.md](BACA-DULU.md). Konfigurasi akun dipusatkan di `installation.json`; template ditandai `GANTI_INSTALASI`.
 
 Remote MCP server (Cloudflare Worker) yang memberi Claude akses untuk membuat repo,
@@ -137,7 +146,7 @@ status GitHub Actions workflow.
 
 Tanpa dua secret ini, tool `get_worker_deployment_status` akan menolak jalan dengan
 pesan error yang jelas (bukan crash), tool lain tidak terpengaruh. Secret yang sama
-ini juga dipakai oleh tool-tool R2 (`list_r2_objects`, `get_r2_object`, `put_r2_object`,
+ini dipakai oleh tool-tool administratif R2 via REST (`list_r2_objects`, `get_r2_object`, `put_r2_object`,
 `delete_r2_object`) — token perlu scope **R2:Read**/**R2:Write** kalau mau tool R2 dipakai.
 
 ### 4. Deploy
@@ -209,7 +218,7 @@ Setelah deploy, kamu akan dapat URL seperti `https://mcpnew.muidsoft.com`.
 | `scaffold_repository` | Buat repo baru + isi file awal dalam satu commit |
 | `trigger_workflow` | Jalankan GitHub Actions workflow manual (`workflow_dispatch`) |
 | `deploy_and_push` | Push file + langsung trigger deploy workflow dalam satu panggilan |
-| `put_r2_object` | **(R2)** Buat object teks baru; overwrite perlu `overwrite=true` dan `confirm=bucket:key` |
+| `put_r2_object` | **(R2)** Buat object teks/binary baru pada binding R2; overwrite perlu `overwrite=true` dan `confirm=bucket:key` |
 | `rerun_workflow` | **(v1.7.0)** Re-run workflow run yang gagal tanpa commit baru (support `failed_jobs_only`) |
 
 **Destructive** (`destructiveHint: true`, Claude akan lebih hati-hati/minta konfirmasi):

@@ -1,8 +1,14 @@
+import { boundedMap, commitFiles, repositoryPath } from './github-validation'
+import { decodeFileBase64 } from './file-content'
+import { MAX_INLINE_BYTES } from './files'
+import { secureToolRegistration } from './tool-security'
 import { requireConfirmation, waitForRun, probeUrl } from './operations'
 import { registerFileTools } from './file-tools'
 import { McpAgent } from 'agents/mcp'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { Octokit } from 'octokit'
+import type { Octokit } from 'octokit'
+import { createGitHubClient } from './github-client'
+import { registerGitHubTools } from './github-tools'
 import { z } from 'zod'
 import { withErrorHandling } from './error-handling'
 import { withAudit } from './audit-log'
@@ -95,13 +101,14 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     if (!this.props?.accessToken) {
       throw new Error('Not authenticated: missing GitHub access token in session props')
     }
-    return new Octokit({ auth: this.props.accessToken })
+    return createGitHubClient(this.props.accessToken)
   }
 
   private async resolveRepo(
     owner: string | undefined,
     repo: string | undefined
   ): Promise<{ owner: string; repo: string }> {
+    if (!this.props?.login || !isAllowedUser(this.props.login, this.env.GITHUB_ALLOWED_USERS, true)) throw new Error('Access denied. Reconnect with an allowed GitHub account.')
     if (owner && repo) return { owner, repo }
     if (!this.props?.login) {
       throw new Error('Not authenticated: missing GitHub login in session props')
@@ -121,7 +128,9 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     const octokit = this.octokit()
     const props = this.props as GitHubProps
     const audit = this.env.AUDIT_DB
+    secureToolRegistration(this.server, this.env, props.login, props.accessToken)
     registerFileTools(this.server, this.env, props.login, this.ctx)
+    registerGitHubTools(this.server, octokit, this.env, props.login, props.accessToken)
 
     const writeTool = <Args>(
       toolName: string,
@@ -299,7 +308,8 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       if (!('content' in data) || data.type !== 'file') {
         return { content: [{ type: 'text', text: 'Path does not point to a readable file.' }] }
       }
-      const decoded = atob(data.content.replace(/\n/g, ''))
+      if (data.size > MAX_INLINE_BYTES) throw new Error('File exceeds the 1 MiB inline limit. Use GitHub downloads for large files.')
+      const decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(Uint8Array.from(atob(data.content.replace(/\n/g, '')), char => char.charCodeAt(0)))
       return { content: [{ type: 'text', text: decoded }] }
     }))
 
@@ -550,7 +560,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
         repo: z.string().min(1).describe('Explicit GitHub repository name; defaults are not used for writes'),
         branch: z.string().default('main'),
         message: z.string(),
-        files: z.array(z.object({ path: z.string(), content: z.string() })).min(1),
+        files: commitFiles,
       },
       annotations: { title: 'Push files (commit)', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     }, writeTool('push_files', ({ files }) => `Pushed ${files.length} file(s)`, async ({ owner, repo, branch, message, files }) => {
@@ -559,13 +569,13 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       const { data: refData } = await octokit.rest.git.getRef({ ...r, ref: `heads/${branch}` })
       const baseSha = refData.object.sha
       const { data: baseCommit } = await octokit.rest.git.getCommit({ ...r, commit_sha: baseSha })
-      const blobs = await Promise.all(files.map(async (file) => {
+      const blobs = await boundedMap(files, async file => {
         const { data: blob } = await octokit.rest.git.createBlob({ ...r, content: file.content, encoding: 'utf-8' })
         return { path: file.path, mode: '100644' as const, type: 'blob' as const, sha: blob.sha }
-      }))
+      })
       const { data: tree } = await octokit.rest.git.createTree({ ...r, base_tree: baseCommit.tree.sha, tree: blobs })
       const { data: commit } = await octokit.rest.git.createCommit({ ...r, message, tree: tree.sha, parents: [baseSha] })
-      await octokit.rest.git.updateRef({ ...r, ref: `heads/${branch}`, sha: commit.sha })
+      await octokit.rest.git.updateRef({ ...r, ref: `heads/${branch}`, sha: commit.sha, force: false })
       return { content: [{ type: 'text', text: `Pushed ${files.length} file(s) to ${r.owner}/${r.repo}@${branch}\nCommit: ${commit.html_url}` }] }
     }))
 
@@ -649,8 +659,8 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       inputSchema: {
         owner: z.string().min(1).describe('Explicit GitHub repository owner; defaults are not used for writes'),
         repo: z.string().min(1).describe('Explicit GitHub repository name; defaults are not used for writes'),
-        old_path: z.string(),
-        new_path: z.string(),
+        old_path: repositoryPath,
+        new_path: repositoryPath,
         branch: z.string().default('main'),
         message: z.string().optional(),
       },
@@ -658,15 +668,19 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
     }, writeTool('rename_file', ({ old_path, new_path }) => `Renamed "${old_path}" -> "${new_path}"`, async ({ owner, repo, old_path, new_path, branch, message }) => {
       const r = await this.resolveRepo(owner, repo)
       assertBranchWritable(this.env, branch)
-      const { data: existing } = await octokit.rest.repos.getContent({ ...r, path: old_path, ref: branch })
-      if (Array.isArray(existing) || !('content' in existing) || existing.type !== 'file') {
-        return { content: [{ type: 'text', text: `"${old_path}" is not a file or does not exist.` }], isError: true }
-      }
-      const fileContent = atob(existing.content.replace(/\n/g, ''))
+      if (old_path === new_path) throw new Error('Source and destination must differ.')
       const { data: refData } = await octokit.rest.git.getRef({ ...r, ref: `heads/${branch}` })
       const baseSha = refData.object.sha
+      const { data: existing } = await octokit.rest.repos.getContent({ ...r, path: old_path, ref: baseSha })
+      if (Array.isArray(existing) || existing.type !== 'file') throw new Error('Source is not a regular file.')
+      try {
+        await octokit.rest.repos.getContent({ ...r, path: new_path, ref: baseSha })
+        throw new Error('Destination already exists. Rename cannot overwrite an existing file.')
+      } catch (error) {
+        if (!(error && typeof error === 'object' && 'status' in error && error.status === 404)) throw error
+      }
       const { data: baseCommit } = await octokit.rest.git.getCommit({ ...r, commit_sha: baseSha })
-      const { data: blob } = await octokit.rest.git.createBlob({ ...r, content: fileContent, encoding: 'utf-8' })
+      const blob = { sha: existing.sha }
       const { data: tree } = await octokit.rest.git.createTree({
         ...r, base_tree: baseCommit.tree.sha,
         tree: [
@@ -677,7 +691,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       const { data: commit } = await octokit.rest.git.createCommit({
         ...r, message: message ?? `rename: ${old_path} -> ${new_path}`, tree: tree.sha, parents: [baseSha],
       })
-      await octokit.rest.git.updateRef({ ...r, ref: `heads/${branch}`, sha: commit.sha })
+      await octokit.rest.git.updateRef({ ...r, ref: `heads/${branch}`, sha: commit.sha, force: false })
       return { content: [{ type: 'text', text: `Renamed "${old_path}" -> "${new_path}" in ${r.owner}/${r.repo}@${branch}\nCommit: ${commit.html_url}` }] }
     }))
 
@@ -697,10 +711,10 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       const n = repo.name
       const { data: refData } = await octokit.rest.git.getRef({ owner: o, repo: n, ref: `heads/${repo.default_branch}` })
       const { data: baseCommit } = await octokit.rest.git.getCommit({ owner: o, repo: n, commit_sha: refData.object.sha })
-      const blobs = await Promise.all(files.map(async (file) => {
+      const blobs = await boundedMap(files, async file => {
         const { data: blob } = await octokit.rest.git.createBlob({ owner: o, repo: n, content: file.content, encoding: 'utf-8' })
         return { path: file.path, mode: '100644' as const, type: 'blob' as const, sha: blob.sha }
-      }))
+      })
       const { data: tree } = await octokit.rest.git.createTree({ owner: o, repo: n, base_tree: baseCommit.tree.sha, tree: blobs })
       const { data: commit } = await octokit.rest.git.createCommit({ owner: o, repo: n, message: 'Initial scaffold', tree: tree.sha, parents: [refData.object.sha] })
       await octokit.rest.git.updateRef({ owner: o, repo: n, ref: `heads/${repo.default_branch}`, sha: commit.sha })
@@ -784,13 +798,13 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       assertBranchWritable(this.env, branch)
       const { data: refData } = await octokit.rest.git.getRef({ ...r, ref: `heads/${branch}` })
       const { data: baseCommit } = await octokit.rest.git.getCommit({ ...r, commit_sha: refData.object.sha })
-      const blobs = await Promise.all(files.map(async (file) => {
+      const blobs = await boundedMap(files, async file => {
         const { data: blob } = await octokit.rest.git.createBlob({ ...r, content: file.content, encoding: 'utf-8' })
         return { path: file.path, mode: '100644' as const, type: 'blob' as const, sha: blob.sha }
-      }))
+      })
       const { data: tree } = await octokit.rest.git.createTree({ ...r, base_tree: baseCommit.tree.sha, tree: blobs })
       const { data: commit } = await octokit.rest.git.createCommit({ ...r, message, tree: tree.sha, parents: [refData.object.sha] })
-      await octokit.rest.git.updateRef({ ...r, ref: `heads/${branch}`, sha: commit.sha })
+      await octokit.rest.git.updateRef({ ...r, ref: `heads/${branch}`, sha: commit.sha, force: false })
       const dispatchedAt = Date.now()
       try {
         await octokit.rest.actions.createWorkflowDispatch({ ...r, workflow_id, ref: branch })
@@ -847,11 +861,11 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       annotations: { title: 'List R2 objects', readOnlyHint: true, openWorldHint: true },
     }, r2Tool(async ({ bucket, prefix, limit, cursor }) => {
       const result = await listR2Objects(this.env, bucket, { prefix, limit, cursor })
-      if (result.objects.length === 0) return { content: [{ type: 'text', text: `No objects in "${bucket}"${prefix ? ` (prefix: ${prefix})` : ''}.` }] }
+      if (result.objects.length === 0) return { structuredContent: { ...result }, content: [{ type: 'text', text: `No visible objects on this page in "${bucket}". Next cursor: ${result.cursor ?? 'none'}.` }] }
       const fmt = (b: number) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b/1024).toFixed(1)} KB` : `${(b/1048576).toFixed(1)} MB`
       const rows = result.objects.map((o) => `${o.key.padEnd(60)} ${fmt(o.size).padStart(10)}  ${o.last_modified}`)
       const header = `R2 Bucket: ${bucket}\nObjects: ${result.objects.length}${result.truncated ? ` (more, cursor: ${result.cursor})` : ''}\n\n${'Key'.padEnd(60)} ${'Size'.padStart(10)}  Last Modified\n${'-'.repeat(85)}\n`
-      return { content: [{ type: 'text', text: header + rows.join('\n') }] }
+      return { content: [{ type: 'text', text: header + rows.join('\n') }], structuredContent: { ...result } }
     }))
 
     this.server.registerTool('get_r2_object', {
@@ -861,35 +875,38 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
         'Requires CLOUDFLARE_API_TOKEN (R2:Read) and CLOUDFLARE_ACCOUNT_ID.',
       inputSchema: {
         bucket: z.string().describe('R2 bucket name'),
-        key: z.string().describe('Object key / path, e.g. "assets/config.json"'),
+        key: z.string().min(1).max(1024).describe('Object key / path, e.g. "assets/config.json"'),
+        encoding: z.enum(['utf8', 'base64']).default('utf8').describe('base64 preserves binary; inline response limited to 1 MiB'),
       },
       annotations: { title: 'Get R2 object', readOnlyHint: true, openWorldHint: true },
-    }, r2Tool(async ({ bucket, key }) => {
-      const { content, contentType, size } = await getR2Object(this.env, bucket, key)
+    }, r2Tool(async ({ bucket, key, encoding }) => {
+      const { content, contentType, size, encoding: returnedEncoding } = await getR2Object(this.env, bucket, key, encoding)
       const fmt = (b: number) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b/1024).toFixed(1)} KB` : `${(b/1048576).toFixed(1)} MB`
       const header = `R2 Object: ${bucket}/${key}\nContent-Type: ${contentType}\nSize: ${fmt(size)}\n\n`
-      return { content: [{ type: 'text', text: header + content }] }
+      return { content: [{ type: 'text', text: header + content }], structuredContent: { bucket, key, content, contentType, size, encoding: returnedEncoding } }
     }))
 
     this.server.registerTool('put_r2_object', {
       description:
-        'Write text content to a Cloudflare R2 object. Creates a new key by default and rejects existing objects. ' +
+        'Write UTF-8 text or base64 binary (encoding=base64), up to 1 MiB, to a Cloudflare R2 object. Creates a new key atomically in the configured FILES_BUCKET (matching FILES_BUCKET_NAME). Other buckets require explicitly confirmed overwrite=true because REST conditional writes are not guaranteed. ' +
         'To replace an object, set overwrite=true and confirm equal to bucket:key. Only overwrite when explicitly requested. ' +
         'Use for deploying config files, JSON data, HTML, scripts, or any text artifact directly to R2. ' +
         'Requires CLOUDFLARE_API_TOKEN (R2:Write) and CLOUDFLARE_ACCOUNT_ID.',
       inputSchema: {
         bucket: z.string().describe('R2 bucket name'),
         key: z.string().describe('Object key / path, e.g. "assets/config.json"'),
-        content: z.string().describe('Text content to upload'),
+        content: z.string().max(4 * Math.ceil(MAX_INLINE_BYTES / 3)).describe('Text or strict padded base64 according to encoding; decoded limit 1 MiB'),
+        encoding: z.enum(['utf8', 'base64']).default('utf8'),
         content_type: z.string().default('text/plain; charset=utf-8').describe('MIME type'),
         overwrite: z.boolean().default(false).describe('Explicitly allow replacement of an existing object'),
         confirm: z.string().optional().describe('Required when overwrite=true; must equal bucket:key'),
       },
       annotations: { title: 'Put R2 object', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-    }, r2WriteTool('put_r2_object', ({ bucket, key }) => `Uploaded "${key}" to bucket "${bucket}"`, async ({ bucket, key, content, content_type, overwrite, confirm }) => {
+    }, r2WriteTool('put_r2_object', ({ bucket, key }) => `Uploaded "${key}" to bucket "${bucket}"`, async ({ bucket, key, content, content_type, overwrite, confirm, encoding }) => {
       if (overwrite) requireConfirmation(confirm, `${bucket}:${key}`)
-      await putR2Object(this.env, bucket, key, content, content_type, overwrite)
-      const size = new TextEncoder().encode(content).length
+      const binary = encoding === 'base64' ? decodeFileBase64(content, MAX_INLINE_BYTES) : undefined
+      await putR2Object(this.env, bucket, key, content, content_type, overwrite, binary)
+      const size = binary?.byteLength ?? new TextEncoder().encode(content).length
       const fmt = (b: number) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b/1024).toFixed(1)} KB` : `${(b/1048576).toFixed(1)} MB`
       return { content: [{ type: 'text', text: `Uploaded "${key}" to R2 bucket "${bucket}" (${fmt(size)}, ${content_type}).` }] }
     }))
@@ -1736,6 +1753,7 @@ export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
       description: 'Load instructions from a BYGA or GitHub-imported skill into this conversation. Tool authorization remains unchanged.',
       argsSchema: { name: z.string(), task: z.string().optional() },
     }, async ({ name, task }) => {
+      if (!isAllowedUser(props.login, this.env.GITHUB_ALLOWED_USERS, true)) throw new Error('Access denied.')
       const skill = await getSkill(this.env.OAUTH_KV, props.login, name)
       const instructions = await readSkillFile(octokit, skill)
       return { messages: [{ role: 'user', content: { type: 'text', text:

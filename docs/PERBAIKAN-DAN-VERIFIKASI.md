@@ -2,6 +2,8 @@
 
 Tanggal persiapan: 22 Oktober 2026.
 
+Catatan historis. Untuk hasil instalasi bersih, integration workerd dan upgrade Oktober terbaru, lihat [VALIDATION-2026-10.md](VALIDATION-2026-10.md).
+
 ## Perubahan
 
 - `fetch_url` membaca body secara streaming sampai maksimum 1 MiB sebelum ekstraksi HTML; `max_length` tetap membatasi jumlah karakter hasil. `truncated=true` jika batas byte atau karakter terlewati.

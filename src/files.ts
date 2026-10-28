@@ -10,7 +10,8 @@ export const validFileName = (name: string) => name.trim().length > 0 && name !=
 export const fileInfo = (object: R2Object) => ({ key: object.key,
   name: object.customMetadata?.filename ?? object.key.split('/').pop() ?? 'file',
   size: object.size, uploadedAt: object.uploaded.toISOString(),
-  contentType: object.httpMetadata?.contentType ?? 'application/octet-stream' })
+  contentType: object.httpMetadata?.contentType ?? 'application/octet-stream',
+  sha256: object.customMetadata?.sha256 ?? null, etag: object.etag ?? null })
 export const privateFileLinks = (key: string) => ({
   downloadUrl: `${installation.publicOrigin}/dashboard/api/files/download?key=${encodeURIComponent(key)}`,
   dashboardUrl: `${installation.publicOrigin}/dashboard#files`, requiresLogin: true,

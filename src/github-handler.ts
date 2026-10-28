@@ -9,6 +9,7 @@ import { dashboardApi } from './dashboard-api'
 import { dashboardHtml, dashboardScript, dashboardStyles } from './dashboard-page'
 
 const app = new Hono<{ Bindings: Env }>()
+app.onError((_error, c) => c.text('Authentication or dashboard service is temporarily unavailable. Please try again.', 503))
 
 app.use('*', async (c, next) => {
   await next()
@@ -152,7 +153,7 @@ app.get('/callback', async (c) => {
 
   const tokenBody = await tokenResponse.json<{ access_token?: string; error?: string }>()
   if (!tokenBody.access_token) {
-    return c.text(`GitHub OAuth error: ${tokenBody.error ?? 'no access_token returned'}`, 400)
+    return c.text('GitHub did not grant an access token. Please start login again.', 400)
   }
 
   const userResponse = await fetch('https://api.github.com/user', {

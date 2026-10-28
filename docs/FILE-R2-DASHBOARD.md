@@ -1,7 +1,7 @@
 # File R2 di dashboard
 
 Buka `/dashboard#files` setelah masuk dengan GitHub. Pilih satu atau beberapa file,
-lalu tekan **Upload file**. Tabel menampilkan nama file, ukuran, waktu upload, dan
+lalu tekan **Upload file**, atau letakkan file pada drop zone. Tombol **Batalkan upload** mencabut tiket di server. Tabel menampilkan nama file, ukuran, waktu upload, dan
 **Download**. Tombol **Muat file berikutnya** melanjutkan daftar jika masih ada data.
 Upload menampilkan persentase dan berjalan berurutan. Batas aplikasi adalah **25 MiB
 per file**; download dikirim sebagai attachment melalui Worker tanpa buffering.
@@ -98,10 +98,9 @@ Tool administratif `list_r2_objects`, `get_r2_object`, `put_r2_object`,
 `delete_r2_object`, dan `r2_bucket_create/list/delete` juga memeriksa allowlist pada
 setiap pemanggilan, termasuk sesi MCP yang sudah tersambung. Allowlist kosong
 menolak akses R2. Izin tool administratif mengikuti cakupan token Cloudflare,
-sehingga tidak dibatasi ke prefix privat dashboard.
+untuk bucket administratif. Prefix `dashboard-files/` sekarang diblokir pada jalur admin objek; gunakan tool file pemilik.
 
-`put_r2_object` membuat objek teks baru secara default dengan kondisi
-`If-None-Match: *`; key yang sudah ada menghasilkan error konflik. Untuk mengganti
+`put_r2_object` menerima teks atau binary base64 (maksimal 1 MiB). Create-only default memakai conditional put native pada `FILES_BUCKET` dengan `FILES_BUCKET_NAME` yang cocok; key yang sudah ada menghasilkan konflik. Untuk bucket tanpa binding, default menolak: kontrak REST tidak menjamin header conditional put. Nested keys mempertahankan slash literal, dan list membaca cursor dari `result_info`. Untuk mengganti
 objek, pemilik harus meminta overwrite dan pemanggilan harus menyertakan
 `overwrite: true` serta `confirm` yang sama persis dengan `bucket:key`.
 `create_file_upload` tetap hanya membuat tiket, bukan isi file; gunakan helper
@@ -167,7 +166,7 @@ Download yang sudah berjalan atau salinan yang sudah diunduh tidak dapat ditarik
 
 ## Migrasi dan rilis
 
-Sebelum menjalankan kode ini, terapkan `migrations/0002_file_management.sql` pada D1
+Sebelum menjalankan kode ini, terapkan `migrations/0002_file_management.sql` dan `migrations/0003_upload_sessions.sql` pada D1
 `AUDIT_DB`. Migrasi hanya menambahkan tabel dan indeks; tidak memindahkan byte R2.
 `npm run deploy` dan workflow Deploy sekarang menerapkan migrasi sebelum deploy.
 Untuk deploy manual lain, jalankan lebih dulu:
@@ -181,3 +180,18 @@ aktifkan binding bucket yang sesuai di template. Migrasi yang belum diterapkan
 menghasilkan error tertutup (503), bukan membuka akses tanpa pemeriksaan status file.
 
 Pengujian SQL menggunakan SQLite bawaan Node.js; jalankan pemeriksaan dengan Node.js 22.13 atau lebih baru.
+
+
+## Kontrak transfer baru
+
+`upload_file` menerima tepat satu dari `content_base64` (maksimal 1 MiB decoded) atau `source_url` (maksimal 25 MiB). URL harus HTTPS pada hostname exact `FILE_UPLOAD_ALLOWED_HOSTS`; tanpa setting tersebut import URL dinonaktifkan. Tidak ada redirect, credential sumber, IP literal atau akses path lokal. Error ukuran, timeout dan body tidak cocok ditolak sebelum menyimpan byte.
+
+Respons sukses berisi `verified: true`, MIME, checksum `file.sha256`, dan ETag. Upload menghitung SHA-256 sebelum put, mengirim checksum ke R2 untuk validasi native, lalu memeriksa HEAD. Body upload dibatasi dalam satu buffer hingga 25 MiB; dashboard mengirim file berurutan. Download tetap streaming sebagai attachment `nosniff`. Jangan menaikkan batas tanpa uji memory/concurrency.
+
+Tiket baru juga mengembalikan `uploadId`, `statusUrl` dan `cancelUrl`. `GET statusUrl` dan `POST cancelUrl` memerlukan bearer upload token yang sama, bukan token MCP atau cookie sesi. `cancel_file_upload(upload_id)` tersedia melalui MCP; dashboard memakai session + same-origin pada `POST /dashboard/api/files/uploads/:id/cancel`. Token upload hanya capability upload satu file, bukan credential R2 atau session token. Creation tidak berarti file sudah tersimpan.
+
+Status D1 adalah pending, uploading, completed, cancelled, atau failed. Klaim atomik mencegah dua request menyelesaikan tiket yang sama. Cancel sebelum completed menyimpan revocation/tombstone dan membersihkan bytes; completed tidak dapat dihapus melalui cancel. Jika koneksi/HEAD/finalisasi gagal, periksa status dan daftar pemilik sebelum tiket baru. Tidak ada auto-retry write. Tiket lama tanpa ID masih diterima sampai expiry sepuluh menitnya; cancellation memerlukan tiket baru.
+
+`POST /dashboard/api/files/uploads` menerima JSON `{ "filename": "report.zip", "size": 123 }`, dengan sesi pemilik dan Origin yang sama. Jalur POST raw lama tetap tersedia untuk client lama. Seluruh upload menghitung byte aktual; Content-Length tidak cukup untuk membuktikan ukuran.
+
+Presigned PUT S3 belum tersedia karena konfigurasi tidak menyediakan S3 signing credentials; binding R2 sendiri bukan signer. Tiket POST merupakan alternatif aman yang diuji. Link share yang sudah ada adalah bearer acak berhash dan dapat dicabut, bukan signature AWS. Tidak ada credential storage yang diberikan ke client.

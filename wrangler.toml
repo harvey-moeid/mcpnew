@@ -26,6 +26,15 @@ database_id = "d5d8057f-6be6-4d8d-bfc6-56006dd39ffc" # GANTI_INSTALASI: UUID D1 
 migrations_dir = "migrations"
 
 [vars]
+# Must match the FILES_BUCKET bucket_name for atomic create-only admin writes.
+FILES_BUCKET_NAME = "mcpnew"
+# Optional: exact trusted public HTTPS source hostnames; empty disables URL imports.
+# FILE_UPLOAD_ALLOWED_HOSTS = "downloads.your-domain.com"
+# Optional: restrict shared Cloudflare administration; defaults to GITHUB_ALLOWED_USERS.
+# CLOUDFLARE_ALLOWED_USERS = "your-github-login"
+# Optional: extra exact browser origins for MCP Inspector; no wildcard.
+# MCP_ALLOWED_ORIGINS = "http://localhost:6274"
+
 # Comma-separated GitHub usernames allowed to use this server.
 # Hanya harvey-moeid yang diizinkan masuk.
 GITHUB_ALLOWED_USERS = "harvey-moeid" # GANTI_INSTALASI: username akun tujuan

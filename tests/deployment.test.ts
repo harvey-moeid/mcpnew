@@ -20,7 +20,7 @@ test('installation check rejects portable placeholders and accepts consistent ne
   Object.assign(config, { publicOrigin: 'https://new-mcp.example.com', githubOwner: 'new-owner',
     githubRepo: 'new-repo', githubRef: 'main', workerName: 'new-mcp' })
   toml = toml.replaceAll('ganti-nama-worker', 'new-mcp').replaceAll('ganti-nama-database', 'new-audit')
-    .replaceAll('GANTI_USERNAME_GITHUB', 'new-owner').replaceAll('GANTI_KV_NAMESPACE_ID', 'a'.repeat(32))
+    .replaceAll('GANTI_NAMA_BUCKET', 'new-files').replaceAll('GANTI_USERNAME_GITHUB', 'new-owner').replaceAll('GANTI_KV_NAMESPACE_ID', 'a'.repeat(32))
     .replaceAll('GANTI_D1_DATABASE_ID', '00000000-0000-0000-0000-000000000001')
   assert.deepEqual(validateInstallation(config, toml), [])
   assert.ok(validateInstallation({ ...config, workerName: 'different-worker' }, toml).length > 0)
