@@ -409,6 +409,25 @@ test('workspace upload rejects missing, expired, revoked or wrong-size tickets b
   assert.equal(storage.objects.size, 0)
 })
 
+test('workspace upload rejects absent contents and preserves tickets during database outages', async t => {
+  const { env, values } = environment()
+  const storage = fileStorage(env)
+  const { token, key } = await testUploadTicket(env, values)
+  const headers = { Authorization: 'Bearer ' + token, 'Content-Length': '4' }
+  const noBody = await request(env, '/file-transfers/upload', { method: 'POST', headers })
+  assert.equal(noBody.status, 400)
+  const original = env.AUDIT_DB.prepare.bind(env.AUDIT_DB)
+  t.mock.method(env.AUDIT_DB, 'prepare', (sql: string) => {
+    if (sql.includes('dashboard_file_state')) throw new Error('sensitive database failure')
+    return original(sql)
+  })
+  const failed = await request(env, '/file-transfers/upload', { method: 'POST', headers, body: new Uint8Array([1, 2, 3, 4]) })
+  assert.equal(failed.status, 503)
+  assert.ok(!JSON.stringify(await failed.json()).includes('sensitive database failure'))
+  assert.ok(values.has(key))
+  assert.equal(storage.objects.size, 0)
+})
+
 test('another logged-in dashboard account cannot download the owner file', async () => {
   const { env } = environment()
   const storage = fileStorage(env)

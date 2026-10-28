@@ -88,6 +88,25 @@ tertentu. Tiket tidak memberi hak download/list dan tidak dapat menimpa objek ya
 tersimpan. Jika koneksi terputus, periksa `list_files` sebelum membuat tiket baru.
 Perubahan allowlist berlaku juga pada tool file dan saat tiket dipakai.
 
+Pembuatan tiket, upload inline MCP, dan upload dashboard memeriksa tabel status file
+D1 sebelum membuat tiket atau menyimpan byte ke R2. Jika migrasi belum diterapkan
+atau database sedang gagal, operasi ditolak. Pemeriksaan ini tidak menjamin database
+akan selalu tersedia setelah upload berhasil; gangguan berikutnya tetap dapat
+menunda akses download sampai database pulih.
+
+Tool administratif `list_r2_objects`, `get_r2_object`, `put_r2_object`,
+`delete_r2_object`, dan `r2_bucket_create/list/delete` juga memeriksa allowlist pada
+setiap pemanggilan, termasuk sesi MCP yang sudah tersambung. Allowlist kosong
+menolak akses R2. Izin tool administratif mengikuti cakupan token Cloudflare,
+sehingga tidak dibatasi ke prefix privat dashboard.
+
+`put_r2_object` membuat objek teks baru secara default dengan kondisi
+`If-None-Match: *`; key yang sudah ada menghasilkan error konflik. Untuk mengganti
+objek, pemilik harus meminta overwrite dan pemanggilan harus menyertakan
+`overwrite: true` serta `confirm` yang sama persis dengan `bucket:key`.
+`create_file_upload` tetap hanya membuat tiket, bukan isi file; gunakan helper
+workspace untuk mengirim byte file ke endpoint tiket tersebut.
+
 **Download privat tetap memerlukan sesi dashboard pemilik file.** URL privat tidak
 mengandung token dan tidak memberi akses ke orang lain. Token MCP maupun tiket upload
 tidak dapat menggantikan cookie login pada endpoint download privat. Pemilik dapat

@@ -10,6 +10,21 @@ const { GitHubHandler, purgeExpiredFiles, restoreFile, queueFileCleanup } = awai
 const schema = await readFile('migrations/0002_file_management.sql', 'utf8')
 const origin = 'https://mcpnew.muidsoft.com'
 
+test('dashboard upload refuses missing file-state migration before writing any R2 bytes', async () => {
+  const { db, env, Cookie, request } = await setup()
+  let writes = 0
+  env.FILES_BUCKET!.put = async () => { writes++; throw new Error('unexpected R2 write') }
+  try {
+    db.exec('DROP TABLE dashboard_file_state')
+    const response = await request('/dashboard/api/files?name=report.txt', {
+      method: 'POST', headers: { Cookie, Origin: origin, 'Content-Length': '1' }, body: 'x',
+    })
+    assert.equal(response.status, 503)
+    assert.ok(!JSON.stringify(await response.json()).includes('no such table'))
+    assert.equal(writes, 0)
+  } finally { db.close() }
+})
+
 async function setup() {
   const db = new DatabaseSync(':memory:')
   db.exec(schema)

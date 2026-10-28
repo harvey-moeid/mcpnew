@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { FileActionError, queueFileCleanup, fileUsagePage, statesFor, readFileState, setFileProject, trashFile, restoreFile, createFileShare, listFileShares, revokeFileShare, TRASH_RETENTION_MS } from './file-management'
+import { assertFileUploadReady, FileActionError, queueFileCleanup, fileUsagePage, statesFor, readFileState, setFileProject, trashFile, restoreFile, createFileShare, listFileShares, revokeFileShare, TRASH_RETENTION_MS } from './file-management'
 import { sameOrigin, type DashboardSession } from './dashboard-auth'
 
 import { MAX_FILE_BYTES, filePrefix as prefix, validFileName as validName, fileInfo, fileDownload, ownedFileKey } from './files'
@@ -37,6 +37,7 @@ dashboardFiles.post('/', async c => {
   if (!Number.isSafeInteger(size) || size > MAX_FILE_BYTES) return c.json({ error: 'Ukuran file maksimal 25 MiB.' }, 413)
   if (size > 0 && !c.req.raw.body) return c.json({ error: 'Isi file tidak tersedia.' }, 400)
   const key = prefix(c.get('session').login) + crypto.randomUUID() + '/' + name
+  await assertFileUploadReady(c.env, c.get('session').login, key)
   // Pass the length-delimited request directly to R2; do not buffer files in Worker memory.
   const object = await c.env.FILES_BUCKET.put(key, c.req.raw.body, {
     httpMetadata: { contentType: 'application/octet-stream' },
