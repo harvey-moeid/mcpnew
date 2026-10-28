@@ -19,6 +19,12 @@ export type SkillEntry = {
 
 export const BUILTIN_SKILLS: SkillEntry[] = [
   {
+    name: 'byga-android',
+    description: 'Build Android apps from discovery and PRD through stack selection, project implementation and installable test APKs delivered by GitHub Actions or GitHub Releases.',
+    version: '1.0.0', builtIn: true, enabled: true,
+    source: { ...skillSource, path: 'skills/byga-android' },
+  },
+  {
     name: 'byga-foto-profesional',
     description: 'Enhance uploaded photos with natural professional color correction, balanced lighting, realistic skin tones, subtle detail and noise reduction while preserving identity, objects, text, framing and composition.',
     version: '1.0.0', builtIn: true, enabled: true,
