@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { FileActionError, fileUsagePage, statesFor, readFileState, setFileProject, trashFile, restoreFile, createFileShare, listFileShares, revokeFileShare, TRASH_RETENTION_MS } from './file-management'
+import { FileActionError, queueFileCleanup, fileUsagePage, statesFor, readFileState, setFileProject, trashFile, restoreFile, createFileShare, listFileShares, revokeFileShare, TRASH_RETENTION_MS } from './file-management'
 import { sameOrigin, type DashboardSession } from './dashboard-auth'
 
 import { MAX_FILE_BYTES, filePrefix as prefix, validFileName as validName, fileInfo, fileDownload, ownedFileKey } from './files'
@@ -21,6 +21,7 @@ dashboardFiles.get('/', async c => {
     const state = states.get(object.key)
     return Boolean(state?.deleted_at != null) === trash && state?.purging !== 2 && (!project || state?.project === project)
   }).map(object => { const state = states.get(object.key); return { ...fileInfo(object), project: state?.project ?? '', deletedAt: state?.deleted_at ?? null, restoreUntil: state?.deleted_at != null ? state.deleted_at + TRASH_RETENTION_MS : null } })
+  queueFileCleanup(c.env, c.executionCtx)
   return c.json({ configured: true, files,
     cursor: result.truncated ? result.cursor : null, maxFileBytes: MAX_FILE_BYTES })
 })

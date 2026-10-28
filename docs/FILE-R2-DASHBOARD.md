@@ -106,9 +106,12 @@ privat dan mencabut semua link berbaginya. Pilih **Tempat sampah** lalu **Pulihk
 sebelum masa pemulihan berakhir. Memulihkan file tidak mengaktifkan ulang link lama.
 Tidak ada tombol hapus permanen langsung.
 
-Cron `17 * * * *` membersihkan isi R2 setelah masa pemulihan berakhir, hingga 100 objek
-per jam. Saat ada backlog, penghapusan fisik bisa lebih lambat; pemulihan tetap hanya
-berlaku tujuh hari. Jika R2 sedang gagal, cron akan mencoba lagi pada jadwal berikutnya.
+Pembersihan berjalan di latar belakang setelah pemilik membuka daftar file lewat
+dashboard atau tool MCP `list_files`, tanpa membutuhkan Cron Trigger tambahan.
+KV membatasi percobaan menjadi sekitar satu kali per jam, hingga 10 objek per percobaan.
+Saat ada backlog atau layanan tidak diakses, penghapusan fisik bisa lebih lambat;
+pemulihan tetap hanya berlaku tujuh hari. Jika R2 sedang gagal, permintaan daftar file
+tetap berhasil dan pembersihan dicoba lagi pada akses setelah masa jeda berakhir.
 Tombstone D1 tetap disimpan untuk mencegah akses atau replay tiket file yang dihapus.
 
 Ringkasan menghitung jumlah dan ukuran byte file aktif serta tempat sampah pada prefix
@@ -154,7 +157,7 @@ Untuk deploy manual lain, jalankan lebih dulu:
 npx wrangler d1 migrations apply AUDIT_DB --remote
 ```
 
-`wrangler.toml` mengaktifkan bucket `mcpnew` dan cron pembersihan. Pada instalasi lain,
+`wrangler.toml` mengaktifkan bucket `mcpnew` tanpa menambah Cron Trigger. Pada instalasi lain,
 aktifkan binding bucket yang sesuai di template. Migrasi yang belum diterapkan
 menghasilkan error tertutup (503), bukan membuka akses tanpa pemeriksaan status file.
 

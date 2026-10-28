@@ -50,3 +50,11 @@ test('post-deploy smoke passes valid endpoints and fails if anonymous MCP access
   assert.equal(await runSmoke(origin, mockSite(200), logger), 1)
   assert.match(errors.join('\n'), /FAIL \/mcp/)
 })
+
+
+test('default deployments require no Cron Trigger capacity on Workers Free', async () => {
+  for (const file of ['wrangler.toml', 'wrangler.example.toml']) {
+    const config = await readFile(file, 'utf8')
+    assert.match(config, /^crons\s*=\s*\[\s*\]/m)
+  }
+})

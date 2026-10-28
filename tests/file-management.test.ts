@@ -5,8 +5,8 @@ import { readFile } from 'node:fs/promises'
 import { build } from 'esbuild'
 import { createSession } from '../src/dashboard-auth.ts'
 
-const compiled = await build({ stdin: { contents: "export { GitHubHandler } from './src/github-handler'; export { purgeExpiredFiles, restoreFile } from './src/file-management'", resolveDir: process.cwd() }, bundle: true, platform: 'node', format: 'esm', write: false })
-const { GitHubHandler, purgeExpiredFiles, restoreFile } = await import('data:text/javascript;base64,' + Buffer.from(compiled.outputFiles[0].text).toString('base64'))
+const compiled = await build({ stdin: { contents: "export { GitHubHandler } from './src/github-handler'; export { purgeExpiredFiles, restoreFile, queueFileCleanup } from './src/file-management'", resolveDir: process.cwd() }, bundle: true, platform: 'node', format: 'esm', write: false })
+const { GitHubHandler, purgeExpiredFiles, restoreFile, queueFileCleanup } = await import('data:text/javascript;base64,' + Buffer.from(compiled.outputFiles[0].text).toString('base64'))
 const schema = await readFile('migrations/0002_file_management.sql', 'utf8')
 const origin = 'https://mcpnew.muidsoft.com'
 
@@ -47,7 +47,7 @@ async function setup() {
   const Cookie = await cookie('owner'), otherCookie = await cookie('other')
   const request = (path: string, options: RequestInit = {}) => GitHubHandler.fetch(new Request(origin + path, options), env, {}) as Promise<Response>
   const manage = (action: string, body: unknown, authCookie = Cookie, requestOrigin = origin) => request('/dashboard/api/files/manage/' + action, { method: 'POST', headers: { Cookie: authCookie, Origin: requestOrigin, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-  return { db, env, objects, key, Cookie, otherCookie, request, manage }
+  return { db, env, values, objects, key, Cookie, otherCookie, request, manage }
 }
 
 test('project labels filter listings and usage counts all account objects including trash across pages', async () => {
@@ -164,5 +164,52 @@ test('failed R2 purge can be retried without allowing expired files to be restor
     assert.equal((await manage('restore', { key })).status, 409)
     env.FILES_BUCKET!.delete = originalDelete
     assert.equal(await purgeExpiredFiles(env), 1)
+  } finally { db.close() }
+})
+
+
+test('authenticated listing queues bounded cleanup with hourly backoff, without requiring cron', async () => {
+  const { db, env, values, objects, Cookie } = await setup()
+  try {
+    for (let index = 0; index < 12; index++) {
+      const key = 'dashboard-files/owner/expired/' + index
+      objects.set(key, { data: new Uint8Array(1) })
+      db.prepare('INSERT INTO dashboard_file_state (actor, key, deleted_at) VALUES (?, ?, ?)').run('owner', key, Date.now() - 8 * 86400000)
+    }
+    const tasks: Promise<unknown>[] = []
+    const ctx = { waitUntil(task: Promise<unknown>) { tasks.push(task) } }
+    const guest = await GitHubHandler.fetch(new Request(origin + '/dashboard/api/files'), env, ctx)
+    assert.equal(guest.status, 401)
+    assert.equal(tasks.length, 0)
+    const owner = await GitHubHandler.fetch(new Request(origin + '/dashboard/api/files', { headers: { Cookie } }), env, ctx)
+    assert.equal(owner.status, 200)
+    assert.equal(tasks.length, 1)
+    await Promise.all(tasks)
+    assert.equal(objects.size, 3) // active file plus two expired objects left for the next batch
+    tasks.length = 0
+    queueFileCleanup(env, ctx)
+    await Promise.all(tasks)
+    assert.equal(objects.size, 3)
+    values.set('file-cleanup:last-attempt', String(Date.now() - 3600001))
+    tasks.length = 0
+    queueFileCleanup(env, ctx)
+    await Promise.all(tasks)
+    assert.equal(objects.size, 1)
+  } finally { db.close() }
+})
+
+test('background R2 cleanup failure cannot break owner file listing or leak raw errors', async t => {
+  const { db, env, key, Cookie, manage } = await setup()
+  try {
+    await manage('trash', { key })
+    db.prepare('UPDATE dashboard_file_state SET deleted_at = ?').run(Date.now() - 8 * 86400000)
+    env.FILES_BUCKET!.delete = async () => { throw new Error('private provider detail') }
+    const logs = t.mock.method(console, 'error', () => {})
+    const tasks: Promise<unknown>[] = []
+    const response = await GitHubHandler.fetch(new Request(origin + '/dashboard/api/files', { headers: { Cookie } }), env, { waitUntil(task: Promise<unknown>) { tasks.push(task) } })
+    assert.equal(response.status, 200)
+    await Promise.all(tasks)
+    assert.equal(logs.mock.callCount(), 1)
+    assert.ok(!JSON.stringify(logs.mock.calls).includes('private provider detail'))
   } finally { db.close() }
 })

@@ -60,6 +60,6 @@ custom_domain = true
 binding = "FILES_BUCKET"
 bucket_name = "mcpnew" # GANTI_INSTALASI: nama bucket file Anda
 
-# Purge expired trash every hour (UTC).
+# Cleanup runs in the background when the owner lists files; no Cron Trigger required.
 [triggers]
-crons = ["17 * * * *"]
+crons = []
