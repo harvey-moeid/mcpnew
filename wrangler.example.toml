@@ -51,3 +51,7 @@ enabled = true
 # Cleanup runs in the background when the owner lists files; no Cron Trigger required.
 [triggers]
 crons = []
+
+# Public brand images only; dashboard/API requests are handled by the Worker.
+[assets]
+directory = "./public"

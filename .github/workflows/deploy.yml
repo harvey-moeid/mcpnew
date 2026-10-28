@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - 'public/**'
       - 'wrangler.toml'
       - 'package.json'
       - 'package-lock.json'
