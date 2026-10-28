@@ -23,7 +23,7 @@ function describeError(err: unknown): string {
   if (err instanceof RequestError) {
     switch (err.status) {
       case 401:
-        return 'GitHub rejected the request: authentication expired or revoked. Reconnect the GitHub Ops connector in Claude settings.'
+        return 'GitHub rejected the request: authentication expired or revoked. Reconnect the BYGA MCP connector in Claude settings.'
       case 403:
         return `GitHub denied this action (403): ${extractGithubMessage(err) ?? 'insufficient permissions or rate-limited.'}`
       case 404:

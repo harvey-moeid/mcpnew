@@ -1,4 +1,4 @@
-# GitHub Ops MCP Server
+# BYGA MCP
 
 Untuk instalasi baru/pindah akun, mulai dari [BACA-DULU.md](BACA-DULU.md). Konfigurasi akun dipusatkan di `installation.json`; template ditandai `GANTI_INSTALASI`.
 
@@ -83,7 +83,7 @@ kemudian uji login GitHub serta satu operasi MCP dengan akun yang diizinkan.
 
 1. Buka https://github.com/settings/developers — **OAuth Apps** — **New OAuth App**
 2. Isi:
-   - **Application name**: `GitHub Ops MCP Server` (bebas)
+   - **Application name**: `BYGA MCP` (bebas)
    - **Homepage URL**: `https://mcpnew.muidsoft.com`
    - **Authorization callback URL**: `https://mcpnew.muidsoft.com/callback`
      (sesuaikan domain dan `resourceMetadata.resource` jika menggunakan instalasi lain)
@@ -154,11 +154,11 @@ Setelah deploy, kamu akan dapat URL seperti `https://mcpnew.muidsoft.com`.
 
 1. Buka **claude.ai — Customize — Connectors**
 2. Klik **+** — **Add custom connector**
-3. **Name**: `GitHub Ops`
+3. **Name**: `BYGA MCP`
 4. **URL**: `https://mcpnew.muidsoft.com/mcp`
 5. Klik **Add** — Claude akan otomatis melakukan Dynamic Client Registration ke endpoint `/register`
 6. Ikuti flow OAuth (redirect ke halaman consent server ini — lalu ke GitHub — approve)
-7. Selesai — di percakapan manapun, aktifkan connector "GitHub Ops" dan Claude bisa langsung push/buat repo
+7. Selesai — di percakapan manapun, aktifkan connector "BYGA MCP" dan Claude bisa langsung push/buat repo
 
 ## Tools yang Tersedia
 
@@ -310,7 +310,7 @@ on:
 - Token Cloudflare untuk `get_worker_deployment_status`/tool R2 sebaiknya dibuat scoped
   (**Workers Scripts:Read** + **R2:Read**/**R2:Write** sesuai kebutuhan), bukan Global API Key
 - Kalau mau cabut akses: GitHub — **Settings — Applications — Authorized OAuth Apps** —
-  cabut akses "GitHub Ops MCP Server" kapan saja
+  cabut akses "BYGA MCP" kapan saja
 - Untuk multi-user/production sungguhan, pertimbangkan menambah rate limiting di `github-handler.ts`
 
 ## Development Lokal

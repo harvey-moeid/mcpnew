@@ -86,7 +86,7 @@ async function fetchNotesWithConcurrency(
 
 export class MyMCP extends McpAgent<Env, unknown, GitHubProps> {
   server = new McpServer({
-    name: 'GitHub Ops MCP Server',
+    name: 'BYGA MCP',
     version: '2.1.0',
   })
 

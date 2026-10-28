@@ -63,7 +63,7 @@ app.get('/authorize', async (c) => {
   const response = renderApprovalDialog(c.req.raw, {
     client,
     server: {
-      name: 'GitHub Ops MCP Server',
+      name: 'BYGA MCP',
       description:
         'Lets Claude create repositories, push commits, open pull requests, and read files on your behalf, using your own GitHub account via OAuth.',
     },
