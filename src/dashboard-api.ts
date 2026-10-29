@@ -38,10 +38,35 @@ dashboardApi.use('*', async (c, next) => {
 })
 
 dashboardApi.onError((error, c) => {
-  if (error instanceof GitHubError) return c.json({ error: error.message },
+  // Never log raw exceptions, URLs with query parameters, or OAuth/session tokens.
+  const requestId = crypto.randomUUID()
+  const path = c.req.path
+  const area = path.endsWith('/audit') ? 'audit'
+    : path.endsWith('/repositories') ? 'repositories'
+    : path.endsWith('/repository') ? 'repository'
+    : path.endsWith('/deployments') ? 'deployments'
+    : path.endsWith('/health') ? 'health'
+    : path.endsWith('/session') ? 'session' : 'dashboard'
+  console.error('dashboard_api_failed', {
+    requestId, area, errorType: error instanceof Error ? error.name : 'unknown',
+    upstreamStatus: error instanceof GitHubError || error instanceof CloudflareApiError ? error.status : undefined,
+  })
+  if (error instanceof GitHubError) return c.json({ error: error.message, code: 'GITHUB_UPSTREAM_FAILED', requestId },
     error.status === 401 ? 401 : error.status === 404 ? 404 : 502)
-  if (error instanceof CloudflareApiError) return c.json({ error: 'Koneksi Cloudflare gagal. Periksa izin koneksi atau coba lagi nanti.' }, 502)
-  return c.json({ error: 'Data belum dapat dimuat. Coba lagi nanti.' }, 503)
+  if (error instanceof CloudflareApiError) return c.json({
+    error: 'Koneksi Cloudflare gagal. Periksa izin koneksi atau coba lagi nanti.',
+    code: 'CLOUDFLARE_UPSTREAM_FAILED', requestId,
+  }, 502)
+  const messages: Record<string, { error: string; code: string }> = {
+    audit: { error: 'Aktivitas (D1) belum dapat dimuat. Periksa binding AUDIT_DB dan migrasi audit_log.', code: 'AUDIT_UNAVAILABLE' },
+    repositories: { error: 'Daftar repositori belum dapat dimuat. Periksa koneksi GitHub.', code: 'REPOSITORIES_UNAVAILABLE' },
+    repository: { error: 'Pull request dan Actions belum dapat dimuat. Periksa koneksi GitHub.', code: 'REPOSITORY_UNAVAILABLE' },
+    deployments: { error: 'Deployment belum dapat dimuat. Periksa koneksi Cloudflare.', code: 'DEPLOYMENTS_UNAVAILABLE' },
+    health: { error: 'Pemeriksaan koneksi gagal. Periksa log Worker.', code: 'HEALTH_UNAVAILABLE' },
+    session: { error: 'Data sesi belum dapat dimuat. Coba login ulang.', code: 'SESSION_UNAVAILABLE' },
+    dashboard: { error: 'Data dashboard belum dapat dimuat. Periksa log Worker.', code: 'DASHBOARD_UNAVAILABLE' },
+  }
+  return c.json({ ...messages[area], requestId }, 503)
 })
 
 dashboardApi.route('/files', dashboardFiles)
