@@ -8,7 +8,9 @@ export async function connectionHealth(env: Env, login: string, token: string) {
   const cloudflareAllowed = isAllowedUser(login, env.CLOUDFLARE_ALLOWED_USERS ?? env.GITHUB_ALLOWED_USERS, true)
   const probes = await Promise.allSettled([
     createGitHubClient(token).rest.users.getAuthenticated(),
-    env.AUDIT_DB.prepare('SELECT 1 AS ok').first(),
+    // Validate the table the dashboard actually reads, not only D1 connectivity.
+    // Delay prepare() into a promise so missing bindings/schema fail this probe only.
+    Promise.resolve().then(() => env.AUDIT_DB.prepare('SELECT id FROM audit_log LIMIT 1').first()),
     env.FILES_BUCKET ? env.FILES_BUCKET.list({ prefix: filePrefix(login), limit: 1 }) : Promise.reject(),
     cloudflareConfigured && cloudflareAllowed ? verifyCloudflareToken(env, 'user') : Promise.reject(),
   ])
