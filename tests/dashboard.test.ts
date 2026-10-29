@@ -260,6 +260,38 @@ test('MCP approval rejects foreign, null and missing origins without consuming s
   assert.equal(new URL(response.headers.get('location')!).hostname, 'github.com')
 })
 
+test('missing audit table returns a diagnostic code without exposing internal errors', async () => {
+  const { env } = environment()
+  ;(env as unknown as { AUDIT_DB: unknown }).AUDIT_DB = {
+    prepare() { throw new Error('database internals must not be returned to the browser') },
+  }
+  const response = await request(env, '/dashboard/api/audit', { headers: { Cookie: await authenticated(env) } })
+  assert.equal(response.status, 503)
+  const body = await response.json() as { code: string; error: string; requestId: string }
+  assert.equal(body.code, 'AUDIT_UNAVAILABLE')
+  assert.match(body.error, /AUDIT_DB/)
+  assert.match(body.requestId, /^[a-f0-9-]{36}$/)
+  assert.ok(!JSON.stringify(body).includes('database internals must not be returned'))
+})
+
+test('health checks the audit table and reports unavailable without failing the entire health check', async t => {
+  const { env } = environment()
+  let query = ''
+  ;(env as unknown as { AUDIT_DB: unknown }).AUDIT_DB = {
+    prepare(sql: string) {
+      query = sql
+      throw new Error('no such table: audit_log')
+    },
+  }
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ login: 'harvey-moeid' }))
+  const response = await request(env, '/dashboard/api/health', { headers: { Cookie: await authenticated(env) } })
+  assert.equal(response.status, 200)
+  const body = await response.json() as { github: string; database: string }
+  assert.equal(body.github, 'available')
+  assert.equal(body.database, 'unavailable')
+  assert.match(query, /FROM audit_log/)
+})
+
 test('private audit queries bind the signed-in actor and validate pagination', async () => {
   const { env, auditBindings } = environment()
   const headers = { Cookie: await authenticated(env) }
