@@ -122,6 +122,53 @@ test('valid callback creates an encrypted session and clears transaction cookie'
   assert.equal(fetchMock.mock.callCount(), 2)
 })
 
+test('OAuth callback submits token request as form data and never retries the single-use code', async t => {
+  const { env } = environment()
+  const transaction = await beginTransaction(env, { kind: 'dashboard' })
+  const originalFetch = t.mock.method(globalThis, 'fetch', async (_url: string | Request, options?: RequestInit) => {
+    assert.equal(options?.headers && (options.headers as Record<string, string>)['Content-Type'], 'application/x-www-form-urlencoded')
+    const form = options?.body as URLSearchParams
+    assert.equal(form.get('client_id'), 'test-app')
+    assert.equal(form.get('client_secret'), 'test-secret')
+    assert.equal(form.get('code'), 'single-use-code')
+    return new Response('', { status: 502 })
+  })
+  const response = await request(env, '/callback?code=single-use-code&state=' + transaction.state,
+    { headers: { Cookie: cookieHeader(transaction.cookie) } })
+  assert.equal(response.status, 502)
+  assert.match(await response.text(), /token exchange failed/i)
+  assert.equal(originalFetch.mock.callCount(), 1)
+})
+
+test('OAuth callback differentiates GitHub profile errors from token-exchange errors', async t => {
+  const { env } = environment()
+  const transaction = await beginTransaction(env, { kind: 'dashboard' })
+  const mock = t.mock.method(globalThis, 'fetch', async (url: string | Request) => {
+    if (String(url).includes('/login/oauth/access_token')) return Response.json({ access_token: 'test-token' })
+    return new Response('', { status: 403 })
+  })
+  const response = await request(env, '/callback?code=code&state=' + transaction.state,
+    { headers: { Cookie: cookieHeader(transaction.cookie) } })
+  assert.equal(response.status, 502)
+  assert.match(await response.text(), /GitHub user profile/i)
+  assert.equal(mock.mock.callCount(), 2)
+})
+
+test('OAuth callback recognizes incorrect credentials without disclosing the response body', async t => {
+  const { env } = environment()
+  const transaction = await beginTransaction(env, { kind: 'dashboard' })
+  t.mock.method(globalThis, 'fetch', async () => Response.json({
+    error: 'incorrect_client_credentials',
+    error_description: 'private diagnostic content must not be exposed',
+  }))
+  const response = await request(env, '/callback?code=code&state=' + transaction.state,
+    { headers: { Cookie: cookieHeader(transaction.cookie) } })
+  assert.equal(response.status, 502)
+  const body = await response.text()
+  assert.match(body, /credentials were rejected/i)
+  assert.ok(!body.includes('private diagnostic content'))
+})
+
 test('a disallowed GitHub account cannot acquire a dashboard session', async t => {
   const { env, values } = environment()
   githubMock(t, 'not-allowed')
