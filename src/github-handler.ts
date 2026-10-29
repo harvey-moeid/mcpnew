@@ -135,39 +135,73 @@ app.get('/callback', async (c) => {
   if (upstreamError) return c.text('GitHub login was cancelled. You can close this page or start again.', 400)
   if (!code) return c.text('Missing code from GitHub callback', 400)
 
-  const tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({
-      client_id: c.env.GITHUB_CLIENT_ID,
-      client_secret: c.env.GITHUB_CLIENT_SECRET,
-      code,
-      redirect_uri: new URL('/callback', c.req.url).href,
-    }),
-    signal: AbortSignal.timeout(15000),
-  })
+  // The OAuth code is single-use: never retry token exchange automatically.
+  // Do not log the callback URL, authorization code, tokens or response body.
+  let tokenResponse: Response
+  try {
+    tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+      body: new URLSearchParams({
+        client_id: c.env.GITHUB_CLIENT_ID,
+        client_secret: c.env.GITHUB_CLIENT_SECRET,
+        code,
+        redirect_uri: new URL('/callback', c.req.url).href,
+      }),
+      signal: AbortSignal.timeout(15000),
+    })
+  } catch {
+    console.error('github_oauth_callback_failed', { stage: 'token_exchange', reason: 'network_or_timeout' })
+    return c.text('Could not contact GitHub OAuth. Start a new login.', 502)
+  }
 
   if (!tokenResponse.ok) {
-    return c.text('Failed to exchange code with GitHub', 502)
+    console.error('github_oauth_callback_failed', { stage: 'token_exchange', upstreamStatus: tokenResponse.status })
+    return c.text('GitHub OAuth token exchange failed. Start a new login.', 502)
   }
 
-  const tokenBody = await tokenResponse.json<{ access_token?: string; error?: string }>()
-  if (!tokenBody.access_token) {
-    return c.text('GitHub did not grant an access token. Please start login again.', 400)
+  let tokenBody: { access_token?: string; error?: string }
+  try {
+    tokenBody = await tokenResponse.json()
+  } catch {
+    console.error('github_oauth_callback_failed', { stage: 'token_exchange', reason: 'invalid_json' })
+    return c.text('GitHub OAuth returned an invalid response. Start a new login.', 502)
+  }
+  if (!tokenBody || typeof tokenBody.access_token !== 'string' || !tokenBody.access_token) {
+    const knownErrors = ['incorrect_client_credentials', 'redirect_uri_mismatch', 'bad_verification_code', 'application_suspended']
+    const reason = knownErrors.includes(tokenBody?.error ?? '') ? tokenBody.error : 'missing_access_token'
+    console.error('github_oauth_callback_failed', { stage: 'token_exchange', reason })
+    if (reason === 'incorrect_client_credentials') return c.text('GitHub OAuth client credentials were rejected. Contact the administrator.', 502)
+    if (reason === 'redirect_uri_mismatch') return c.text('GitHub OAuth redirect URI does not match the app configuration.', 502)
+    return c.text('GitHub did not grant an access token. Start a new login.', 400)
   }
 
-  const userResponse = await fetch('https://api.github.com/user', {
-    headers: {
-      Authorization: `Bearer ${tokenBody.access_token}`,
-      'User-Agent': 'github-mcp-server',
-      Accept: 'application/vnd.github+json',
-    },
-    signal: AbortSignal.timeout(15000),
-  })
+  let userResponse: Response
+  try {
+    userResponse = await fetch('https://api.github.com/user', {
+      headers: {
+        Authorization: `Bearer ${tokenBody.access_token}`,
+        'User-Agent': 'github-mcp-server',
+        Accept: 'application/vnd.github+json',
+      },
+      signal: AbortSignal.timeout(15000),
+    })
+  } catch {
+    console.error('github_oauth_callback_failed', { stage: 'user_profile', reason: 'network_or_timeout' })
+    return c.text('Could not contact GitHub profile API. Start a new login.', 502)
+  }
   if (!userResponse.ok) {
-    return c.text('Failed to fetch GitHub user profile', 502)
+    console.error('github_oauth_callback_failed', { stage: 'user_profile', upstreamStatus: userResponse.status })
+    return c.text('Failed to fetch GitHub user profile. Start a new login.', 502)
   }
-  const githubUser = await userResponse.json<{ login: string; name: string | null; id: number; avatar_url: string }>()
+  let githubUser: { login: string; name: string | null; id: number; avatar_url: string }
+  try {
+    githubUser = await userResponse.json()
+    if (!githubUser || typeof githubUser.login !== 'string' || !githubUser.login) throw new Error('Invalid profile')
+  } catch {
+    console.error('github_oauth_callback_failed', { stage: 'user_profile', reason: 'invalid_json_or_profile' })
+    return c.text('GitHub returned an invalid user profile. Start a new login.', 502)
+  }
 
   // Optional allowlist: restrict this server to specific GitHub usernames.
   if (!isAllowedUser(githubUser.login, c.env.GITHUB_ALLOWED_USERS, transaction.transaction.kind === 'dashboard')) {
