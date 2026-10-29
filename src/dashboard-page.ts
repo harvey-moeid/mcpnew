@@ -56,7 +56,7 @@ const installation = ${JSON.stringify(installation).replace(/</g, "\\u003c")};
   async function api(path, options) {
     const response = await fetch('/dashboard/api/' + path, Object.assign({ credentials: 'same-origin', headers: { Accept: 'application/json' } }, options || {}));
     const data = await response.json().catch(function () { return {}; });
-    if (!response.ok) { const error = new Error(data.error || 'Data belum dapat dimuat. Coba lagi.'); error.status = response.status; throw error; }
+    if (!response.ok) { const suffix = data.requestId ? ' [ID: ' + String(data.requestId).slice(0, 8) + ']' : ''; const error = new Error((data.error || 'Data belum dapat dimuat. Coba lagi.') + suffix); error.status = response.status; error.code = data.code || ''; throw error; }
     return data;
   }
   function setView(view) {
@@ -101,12 +101,12 @@ const installation = ${JSON.stringify(installation).replace(/</g, "\\u003c")};
     if (!repo) { state.details = { pullRequests: [], runs: [] }; renderDetails(); return; }
     state.details = null; $('overview-pulls').innerHTML = loading(); $('overview-runs').innerHTML = loading(); $('pulls-list').innerHTML = loading(); renderStats();
     try { const data = await api('repository?repo=' + encodeURIComponent(repo)); if (generation !== state.generation) return; state.details = data; delete state.errors.repository; }
-    catch (error) { if (generation !== state.generation) return; state.errors.repository = error.message; state.details = { pullRequests: [], runs: [], error: error.message }; if (error.status === 401) { showLogin(error.message); return; } }
+    catch (error) { if (generation !== state.generation) return; state.errors.repository = 'Pull requests & Actions: ' + error.message; state.details = { pullRequests: [], runs: [], error: error.message }; if (error.status === 401) { showLogin(error.message); return; } }
     renderDetails(); setNotice();
   }
   async function loadDeployments() {
     try { state.deployments = await api('deployments'); delete state.errors.deployments; }
-    catch (error) { state.deployments = { error: error.message }; state.errors.deployments = error.message; }
+    catch (error) { state.deployments = { error: error.message }; state.errors.deployments = 'Deployment: ' + error.message; }
     renderDeployments(); renderStats(); setNotice();
   }
   function formatBytes(size) {
@@ -298,7 +298,7 @@ const installation = ${JSON.stringify(installation).replace(/</g, "\\u003c")};
     const errorsOnly = $('audit-errors').checked;
     const before = append && state.audit.length ? '&before=' + state.audit[state.audit.length - 1].id : '';
     try { const data = await api('audit?errors=' + errorsOnly + before); state.audit = append ? state.audit.concat(data.entries) : data.entries; state.auditMore = data.hasMore; delete state.errors.audit; }
-    catch (error) { state.errors.audit = error.message; if (!append) state.audit = []; state.auditMore = false; }
+    catch (error) { state.errors.audit = 'Aktivitas: ' + error.message; if (!append) state.audit = []; state.auditMore = false; }
     renderAudit(); setNotice();
   }
   function renderStats() {
@@ -370,7 +370,7 @@ const installation = ${JSON.stringify(installation).replace(/</g, "\\u003c")};
     if (!state.session) return;
     $('refresh').disabled = true;
     try { await loadRepos(false); delete state.errors.repositories; }
-    catch (error) { state.errors.repositories = error.message; if (error.status === 401) { showLogin(error.message); $('refresh').disabled = false; return; } }
+    catch (error) { state.errors.repositories = 'Repositori: ' + error.message; if (error.status === 401) { showLogin(error.message); $('refresh').disabled = false; return; } }
     await Promise.allSettled([loadDetails(), loadDeployments(), loadAudit(false), ...(state.view === 'files' ? [loadFiles(false), loadUsage(false)] : [])]);
     setNotice(); $('refresh').disabled = false;
   }
