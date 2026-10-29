@@ -4,8 +4,8 @@ import { build } from 'esbuild'
 import { beginTransaction, consumeTransaction, createSession, readSession, isAllowedUser, digest } from '../src/dashboard-auth.ts'
 
 const origin = 'https://mcpnew.muidsoft.com'
-const compiled = await build({ entryPoints: ['src/github-handler.ts'], bundle: true, platform: 'node', format: 'esm', write: false })
-const { GitHubHandler } = await import('data:text/javascript;base64,' + Buffer.from(compiled.outputFiles[0].text).toString('base64'))
+const compiled = await build({ stdin: { contents: "export { GitHubHandler } from './src/github-handler'; export { checkSummary } from './src/dashboard-api'", resolveDir: process.cwd() }, bundle: true, platform: 'node', format: 'esm', write: false })
+const { GitHubHandler, checkSummary } = await import('data:text/javascript;base64,' + Buffer.from(compiled.outputFiles[0].text).toString('base64'))
 
 function environment() {
   const values = new Map<string, string>()
@@ -48,6 +48,18 @@ function githubMock(t: import('node:test').TestContext, login = 'harvey-moeid') 
   })
 }
 
+test('PR checks only report success for recognized completed conclusions or successful statuses', () => {
+  for (const check of [{}, { status: 'completed' }, { status: 'completed', conclusion: null },
+    { status: 'completed', conclusion: 'stale' }, { state: 'unrecognized' }]) {
+    assert.equal(checkSummary([{ status: 'completed', conclusion: 'success' }, check]), 'unknown')
+  }
+  assert.equal(checkSummary([]), 'none')
+  assert.equal(checkSummary([{ state: 'success' }, ...['success', 'neutral', 'skipped'].map(conclusion => ({ status: 'completed', conclusion }))]), 'success')
+  assert.equal(checkSummary([{ status: 'queued' }]), 'pending')
+  assert.equal(checkSummary([{ status: 'completed', conclusion: 'cancelled' }]), 'cancelled')
+  assert.equal(checkSummary([{ state: 'error' }, {}]), 'failure')
+})
+
 test('dashboard shell is public but every private API requires a session', async () => {
   const { env } = environment()
   const page = await request(env, '/dashboard')
@@ -76,6 +88,30 @@ test('dashboard login is unavailable without an explicit allowlist', async () =>
   assert.equal((await request(env, '/dashboard/login')).status, 503)
   assert.equal(isAllowedUser('anyone', '', true), false)
   assert.equal(isAllowedUser('HARVEY-MOEID', 'harvey-moeid', true), true)
+})
+
+test('dashboard Cloudflare metadata requires its administrator allowlist before any upstream request', async t => {
+  const { env } = environment()
+  env.CLOUDFLARE_API_TOKEN = 'cloudflare-test-token'
+  env.CLOUDFLARE_ACCOUNT_ID = 'test-account'
+  const headers = { Cookie: await authenticated(env) }
+  const upstream = t.mock.method(globalThis, 'fetch', async () => Response.json({ success: true, result: { deployments: [] } }))
+  for (const allowlist of ['other-admin', '', ' ']) {
+    env.CLOUDFLARE_ALLOWED_USERS = allowlist
+    const session = await request(env, '/dashboard/api/session', { headers })
+    assert.equal((await session.json()).configuration.cloudflare, false)
+    const denied = await request(env, '/dashboard/api/deployments', { headers })
+    assert.equal(denied.status, 403)
+    assert.ok(!(await denied.text()).includes('cloudflare-test-token'))
+  }
+  assert.equal(upstream.mock.callCount(), 0)
+  for (const allowlist of ['HARVEY-MOEID', undefined]) {
+    env.CLOUDFLARE_ALLOWED_USERS = allowlist
+    const session = await request(env, '/dashboard/api/session', { headers })
+    assert.equal((await session.json()).configuration.cloudflare, true)
+    assert.equal((await request(env, '/dashboard/api/deployments', { headers })).status, 200)
+  }
+  assert.equal(upstream.mock.callCount(), 2)
 })
 
 test('upstream OAuth state is opaque, browser bound and expires', async t => {

@@ -1,5 +1,7 @@
 # BYGA MCP
 
+Audit workspace 29 Oktober 2026 memperbaiki akses metadata Cloudflare di dashboard, timeout body smoke test, dan status PR yang belum diketahui. Dependensi kompatibel diperbarui melalui lockfile. Lihat [laporan audit dan verifikasi](docs/AUDIT-2026-10-29.md).
+
 ## Upgrade keamanan dan transfer (Oktober 2026)
 
 Upload file sekarang memvalidasi byte aktual, checksum SHA-256 native R2 dan HEAD sebelum melaporkan sukses. Batas tetap **1 MiB base64** dan **25 MiB tiket/dashboard/URL HTTPS yang diizinkan**. Dashboard mendukung drag-and-drop, progress, cancel server dan health check saat diminta. Tidak ada akses otomatis ke file lokal pengguna.

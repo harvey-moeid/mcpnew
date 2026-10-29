@@ -42,3 +42,46 @@ test('smoke probe rejects wrong content and hides reflected network errors', asy
   t.mock.method(globalThis, 'fetch', async () => { throw new Error('sensitive value') })
   assert.ok(!JSON.stringify(await probeUrl(options)).includes('sensitive value'))
 })
+
+test('smoke probe times out stalled bodies and retries despite an uncooperative cancel hook', { timeout: 5000 }, async t => {
+  let calls = 0, cancelled = false
+  t.mock.method(globalThis, 'fetch', async () => ++calls === 1
+    ? new Response(new ReadableStream({ cancel() { cancelled = true; return new Promise<void>(() => {}) } }))
+    : new Response('healthy'))
+  const result = await probeUrl({ url: 'https://example.test', expectedStatus: 200, expectedText: 'healthy', timeoutMs: 20, attempts: 2, delayMs: 0 })
+  assert.equal(result.ok, true)
+  assert.equal(result.attempts.length, 2)
+  assert.equal(result.attempts[0].ok, false)
+  assert.equal(cancelled, true)
+})
+
+test('smoke probe does not wait for cancellation after a match or a status-only check', { timeout: 5000 }, async t => {
+  for (const expectedText of ['healthy', undefined]) {
+    let cancelled = false
+    t.mock.method(globalThis, 'fetch', async () => new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode('healthy')) },
+      cancel() { cancelled = true; return new Promise<void>(() => {}) },
+    })))
+    const result = await probeUrl({ url: 'https://example.test', expectedStatus: 200, expectedText, timeoutMs: 20, attempts: 1, delayMs: 0 })
+    assert.equal(result.ok, true)
+    assert.equal(cancelled, true)
+  }
+})
+
+test('smoke probe bounds body reads and matches text across split UTF-8 chunks', async t => {
+  const bytes = new TextEncoder().encode('sehat 🌏')
+  t.mock.method(globalThis, 'fetch', async () => new Response(new ReadableStream({ start(controller) {
+    for (const byte of bytes) controller.enqueue(Uint8Array.of(byte))
+    controller.close()
+  } })))
+  const options = { url: 'https://example.test', expectedStatus: 200, expectedText: 'sehat 🌏', timeoutMs: 1000, attempts: 1, delayMs: 0 }
+  assert.equal((await probeUrl(options)).ok, true)
+  let pulls = 0, cancelled = false
+  t.mock.method(globalThis, 'fetch', async () => new Response(new ReadableStream({
+    pull(controller) { pulls++; controller.enqueue(new Uint8Array(65536).fill(97)) },
+    cancel() { cancelled = true },
+  })))
+  assert.equal((await probeUrl(options)).ok, false)
+  assert.ok(pulls <= 17)
+  assert.equal(cancelled, true)
+})
