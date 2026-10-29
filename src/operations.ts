@@ -36,17 +36,27 @@ export async function probeUrl(options: {
   const history: Array<{ attempt: number; elapsed_ms: number; status?: number; ok: boolean; error?: string }> = []
   for (let attempt = 1; attempt <= options.attempts; attempt++) {
     const started = Date.now()
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), options.timeoutMs)
     let response: Response | undefined
     try {
-      response = await fetch(options.url, { signal: AbortSignal.timeout(options.timeoutMs), redirect: 'follow' })
+      response = await fetch(options.url, { signal: controller.signal, redirect: 'follow' })
       let matches = options.expectedText === undefined
       if (!matches && response.body) {
         const reader = response.body.getReader()
         const decoder = new TextDecoder()
         let text = '', bytes = 0
+        // A body can stall after headers, and custom streams may ignore fetch's
+        // signal. Race each read against the same per-attempt deadline.
+        const onAbort = () => rejectRead(controller.signal.reason)
+        let rejectRead: (reason: unknown) => void = () => {}
+        const aborted = new Promise<never>((_, reject) => { rejectRead = reject })
+        controller.signal.addEventListener('abort', onAbort, { once: true })
         try {
+          controller.signal.throwIfAborted()
           while (bytes < 1024 * 1024) {
-            const chunk = await reader.read()
+            const chunk = await Promise.race([reader.read(), aborted])
+            controller.signal.throwIfAborted()
             if (chunk.done) { text += decoder.decode(); break }
             const bounded = chunk.value.subarray(0, 1024 * 1024 - bytes)
             bytes += bounded.byteLength
@@ -54,14 +64,21 @@ export async function probeUrl(options: {
             if (text.includes(options.expectedText!)) break
           }
           matches = text.includes(options.expectedText!)
-        } finally { await reader.cancel() }
-      } else { await response.body?.cancel() }
+        } finally {
+          controller.signal.removeEventListener('abort', onAbort)
+          // Cancellation itself is allowed to stall or reject upstream.
+          void reader.cancel().catch(() => {})
+          reader.releaseLock()
+        }
+      } else { void response.body?.cancel().catch(() => {}) }
       const ok = response.status === options.expectedStatus && matches
       history.push({ attempt, elapsed_ms: Date.now() - started, status: response.status, ok,
         ...(!matches ? { error: 'Expected text was not found within the first 1 MiB.' } : {}) })
       if (ok) return { ok: true, url: options.url, attempts: history }
     } catch {
       history.push({ attempt, elapsed_ms: Date.now() - started, ok: false, error: 'Request failed or timed out.' })
+    } finally {
+      clearTimeout(timer)
     }
     if (attempt < options.attempts) await sleep(options.delayMs)
   }

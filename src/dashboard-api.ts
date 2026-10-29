@@ -1,7 +1,7 @@
 import { connectionHealth } from './connection-health'
 import { Hono } from 'hono'
 import { dashboardFiles } from './dashboard-files'
-import { readSession, destroySession, sameOrigin, type DashboardSession } from './dashboard-auth'
+import { readSession, destroySession, sameOrigin, isAllowedUser, type DashboardSession } from './dashboard-auth'
 import { getWorkerDeployments, CloudflareApiError } from './cloudflare'
 import installation from '../installation.json' with { type: 'json' }
 
@@ -49,7 +49,8 @@ dashboardApi.route('/files', dashboardFiles)
 dashboardApi.get('/session', c => {
   const { login, name, avatarUrl, expiresAt } = c.get('session')
   return c.json({ user: { login, name, avatarUrl }, expiresAt,
-    configuration: { cloudflare: Boolean(c.env.CLOUDFLARE_API_TOKEN && c.env.CLOUDFLARE_ACCOUNT_ID),
+    configuration: { cloudflare: isAllowedUser(login, c.env.CLOUDFLARE_ALLOWED_USERS ?? c.env.GITHUB_ALLOWED_USERS, true)
+        && Boolean(c.env.CLOUDFLARE_API_TOKEN && c.env.CLOUDFLARE_ACCOUNT_ID),
       audit: Boolean(c.env.AUDIT_DB), protectedBranches: c.env.PROTECTED_BRANCHES ?? 'main,master',
       directPushAllowed: c.env.ALLOW_DIRECT_PUSH_TO_PROTECTED === 'true',
       endpoint: `${new URL(c.req.url).origin}/mcp`, worker: installation.workerName } })
@@ -90,7 +91,8 @@ export function checkSummary(checks: Array<{ status?: string; conclusion?: strin
   if (checks.some(check => ['failure', 'timed_out', 'action_required', 'startup_failure'].includes(check.conclusion ?? '') || ['failure', 'error'].includes(check.state ?? ''))) return 'failure'
   if (checks.some(check => check.status && check.status !== 'completed' || check.state === 'pending')) return 'pending'
   if (checks.some(check => check.conclusion === 'cancelled')) return 'cancelled'
-  return 'success'
+  return checks.every(check => check.state === 'success' || check.status === 'completed'
+    && ['success', 'neutral', 'skipped'].includes(check.conclusion ?? '')) ? 'success' : 'unknown'
 }
 
 dashboardApi.get('/repository', async c => {
@@ -129,6 +131,9 @@ dashboardApi.get('/repository', async c => {
 })
 
 dashboardApi.get('/deployments', async c => {
+  if (!isAllowedUser(c.get('session').login, c.env.CLOUDFLARE_ALLOWED_USERS ?? c.env.GITHUB_ALLOWED_USERS, true)) {
+    return c.json({ error: 'Akses Cloudflare tidak diizinkan untuk akun ini.' }, 403)
+  }
   if (!c.env.CLOUDFLARE_API_TOKEN || !c.env.CLOUDFLARE_ACCOUNT_ID) return c.json({ configured: false, deployments: [] })
   const result = await getWorkerDeployments(c.env, installation.workerName)
   return c.json({ configured: true, deployments: result.deployments.slice(0, 20).map(deployment => ({
