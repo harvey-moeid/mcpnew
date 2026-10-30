@@ -156,11 +156,38 @@ export async function getWorkerDeployments(
   env: Env,
   scriptName: string
 ): Promise<{ deployments: WorkerDeployment[] }> {
-  const result = await cfFetch<any>(env, `/workers/scripts/${scriptName}/deployments`)
-  const deployments: WorkerDeployment[] = Array.isArray(result)
-    ? result
-    : result?.deployments ?? result?.items ?? []
-  return { deployments }
+  // A runtime fetch failure is a TypeError, not an HTTP response. Classify it
+  // separately so the dashboard does not report an unexplained 503.
+  let result: unknown
+  try {
+    result = await cfFetch<unknown>(env, `/workers/scripts/${encodeURIComponent(scriptName)}/deployments`)
+  } catch (error) {
+    if (error instanceof TypeError) {
+      console.error('cloudflare_deployments_failed', { phase: 'request_or_decode', errorType: 'TypeError' })
+      throw new CloudflareApiError('Cloudflare deployment request failed before a valid API response was received.', 502)
+    }
+    throw error
+  }
+
+  const candidate = Array.isArray(result) ? result :
+    result && typeof result === 'object'
+      ? (result as { deployments?: unknown; items?: unknown }).deployments
+        ?? (result as { items?: unknown }).items
+      : undefined
+
+  // Do not misreport malformed upstream data as zero deployments, and do not
+  // let .slice() or .map() throw an opaque TypeError in dashboard-api.ts.
+  if (!Array.isArray(candidate) || candidate.some(deployment =>
+    !deployment || typeof deployment !== 'object' || typeof deployment.id !== 'string' ||
+    (deployment.versions != null && (!Array.isArray(deployment.versions) ||
+      deployment.versions.some((version: unknown) =>
+        !version || typeof version !== 'object' ||
+        typeof (version as { version_id?: unknown }).version_id !== 'string')))
+  )) {
+    console.error('cloudflare_deployments_failed', { phase: 'response_validation', errorType: 'UnexpectedShape' })
+    throw new CloudflareApiError('Cloudflare deployment API returned an unexpected response format.', 502)
+  }
+  return { deployments: candidate as WorkerDeployment[] }
 }
 
 // ---------------------------------------------------------------------------

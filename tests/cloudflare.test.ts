@@ -106,3 +106,32 @@ test('R2 REST preserves literal object slashes and top-level pagination, includi
   await assert.rejects(cloudflare.putR2Object(env, 'files', 'new.txt', 'text'), /Safe create-only/)
   assert.equal(calls.length, before)
 })
+
+test('Worker deployments accept documented API shape and reject malformed data without a TypeError', async t => {
+  const { getWorkerDeployments } = cloudflare
+  let upstream: unknown = { success: true, result: {
+    deployments: [{ id: 'deployment-1', created_on: '2026-10-30T08:00:00Z',
+      versions: [{ version_id: 'version-1', percentage: 100 }] }],
+  } }
+  let throwNetwork = false
+  t.mock.method(globalThis, 'fetch', async () => {
+    if (throwNetwork) throw new TypeError('Failed to fetch')
+    return Response.json(upstream)
+  })
+
+  assert.equal((await getWorkerDeployments(env, 'worker')).deployments[0].versions?.[0].version_id, 'version-1')
+  upstream = { success: true, result: { deployments: [] } }
+  assert.deepEqual((await getWorkerDeployments(env, 'worker')).deployments, [])
+  upstream = { success: true, result: { deployments: {} } }
+  await assert.rejects(getWorkerDeployments(env, 'worker'), (error: unknown) =>
+    error instanceof Error && error.name === 'CloudflareApiError')
+  upstream = { success: true, result: { deployments: [{ id: 'deployment-1', versions: {} }] } }
+  await assert.rejects(getWorkerDeployments(env, 'worker'), (error: unknown) =>
+    error instanceof Error && error.name === 'CloudflareApiError')
+  upstream = { success: true, result: { deployments: [{ id: 'deployment-1', versions: [null] }] } }
+  await assert.rejects(getWorkerDeployments(env, 'worker'), (error: unknown) =>
+    error instanceof Error && error.name === 'CloudflareApiError')
+  throwNetwork = true
+  await assert.rejects(getWorkerDeployments(env, 'worker'), (error: unknown) =>
+    error instanceof Error && error.name === 'CloudflareApiError')
+})

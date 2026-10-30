@@ -114,6 +114,21 @@ test('dashboard Cloudflare metadata requires its administrator allowlist before 
   assert.equal(upstream.mock.callCount(), 2)
 })
 
+test('malformed deployment payload returns a classified upstream error rather than 503', async t => {
+  const { env } = environment()
+  env.CLOUDFLARE_API_TOKEN = 'cloudflare-test-token'
+  env.CLOUDFLARE_ACCOUNT_ID = 'test-account'
+  const headers = { Cookie: await authenticated(env) }
+  t.mock.method(globalThis, 'fetch', async () =>
+    Response.json({ success: true, result: { deployments: { unexpected: true } } }))
+  const response = await request(env, '/dashboard/api/deployments', { headers })
+  assert.equal(response.status, 502)
+  const payload = await response.json() as { code: string; requestId: string; error: string }
+  assert.equal(payload.code, 'CLOUDFLARE_UPSTREAM_FAILED')
+  assert.ok(payload.requestId)
+  assert.ok(!JSON.stringify(payload).includes('cloudflare-test-token'))
+})
+
 test('upstream OAuth state is opaque, browser bound and expires', async t => {
   const { env, values } = environment()
   const transaction = await beginTransaction(env, { kind: 'dashboard' })
