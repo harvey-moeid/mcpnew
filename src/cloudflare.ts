@@ -14,10 +14,20 @@ import { MAX_INLINE_BYTES } from './files'
 async function cfRequest(url: string, options: RequestInit = {}): Promise<Response> {
   const signal = options.signal ?? AbortSignal.timeout(15000)
   const method = (options.method ?? 'GET').toUpperCase()
-  let response = await fetch(url, { ...options, redirect: 'error', signal })
+  // Workers only supports follow/manual. Reject redirects explicitly so API
+  // credentials never follow a Location header to another origin.
+  const request = async () => {
+    const response = await fetch(url, { ...options, redirect: 'manual', signal })
+    if (response.status >= 300 && response.status < 400) {
+      void response.body?.cancel().catch(() => {})
+      throw new CloudflareApiError('Cloudflare API redirect refused.', 502)
+    }
+    return response
+  }
+  let response = await request()
   if (['GET', 'HEAD'].includes(method) && [502, 503, 504].includes(response.status) && !signal.aborted) {
     void response.body?.cancel().catch(() => {})
-    response = await fetch(url, { ...options, redirect: 'error', signal })
+    response = await request()
   }
   return response
 }

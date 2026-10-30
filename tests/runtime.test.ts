@@ -14,13 +14,21 @@ test('isolated workerd: OAuth discovery, DCR, invalid MCP token, real D1 tickets
   const directory = await mkdtemp(join(tmpdir(), 'mcpnew-runtime-'))
   const outfile = join(directory, 'index.js')
   execFileSync(process.execPath, ['node_modules/wrangler/bin/wrangler.js', 'deploy', '--dry-run', '--outdir', directory], { env: { ...process.env, WRANGLER_SEND_METRICS: 'false', XDG_CONFIG_HOME: directory }, stdio: 'pipe' })
+  let cloudflareRedirect = false, cloudflareRequests = 0
   const mf = new Miniflare(convertV4MiniflareOptions({ modules: true, modulesRoot: directory, scriptPath: outfile, compatibilityDate: '2026-08-01', compatibilityFlags: ['nodejs_compat'],
     kvNamespaces: ['OAUTH_KV'], d1Databases: ['AUDIT_DB'], r2Buckets: ['FILES_BUCKET'],
     durableObjects: { MCP_OBJECT: { className: 'MyMCP', useSQLite: true } },
-    bindings: { FILES_BUCKET_NAME: 'local-files', GITHUB_ALLOWED_USERS: 'owner,other', GITHUB_CLIENT_ID: 'test-client', GITHUB_CLIENT_SECRET: 'runtime-test-secret', COOKIE_ENCRYPTION_KEY: 'runtime-test-encryption-key', PROTECTED_BRANCHES: 'main,master', ALLOW_DIRECT_PUSH_TO_PROTECTED: 'false' },
+    bindings: { FILES_BUCKET_NAME: 'local-files', GITHUB_ALLOWED_USERS: 'owner,other', GITHUB_CLIENT_ID: 'test-client', GITHUB_CLIENT_SECRET: 'runtime-test-secret', COOKIE_ENCRYPTION_KEY: 'runtime-test-encryption-key', PROTECTED_BRANCHES: 'main,master', ALLOW_DIRECT_PUSH_TO_PROTECTED: 'false', CLOUDFLARE_API_TOKEN: 'runtime-cloudflare-test-token', CLOUDFLARE_ACCOUNT_ID: 'runtime-account' },
     outboundService(request) {
       if (request.url === 'https://github.com/login/oauth/access_token') return Response.json({ access_token: 'runtime-github-test-token' })
       if (request.url === 'https://api.github.com/user') return Response.json({ login: 'owner', name: 'Owner', avatar_url: '', id: 1 })
+      if (new URL(request.url).origin === 'https://api.cloudflare.com') {
+        cloudflareRequests++
+        assert.equal(request.headers.get('authorization'), 'Bearer runtime-cloudflare-test-token')
+        if (cloudflareRedirect) return new Response(null, { status: 302, headers: { Location: 'https://untrusted.example/credentials' } })
+        if (request.url.endsWith('/user/tokens/verify')) return Response.json({ success: true, result: { status: 'active' } })
+        if (request.url.endsWith('/workers/scripts/github-mcp-server/deployments')) return Response.json({ success: true, result: { deployments: [{ id: 'runtime-deployment', versions: [{ version_id: 'runtime-version', percentage: 100 }] }] } })
+      }
       throw new Error('Unexpected outbound network request: ' + new URL(request.url).origin)
     },
   }))
@@ -110,7 +118,17 @@ test('isolated workerd: OAuth discovery, DCR, invalid MCP token, real D1 tickets
     const health = await request('/dashboard/api/health', { headers: { Cookie } })
     assert.equal(health.status, 200)
     const healthData = await health.json()
-    assert.equal(healthData.github, 'available'); assert.equal(healthData.files, 'available'); assert.equal(healthData.database, 'available'); assert.equal(healthData.cloudflare, 'not_configured')
+    assert.equal(healthData.github, 'available'); assert.equal(healthData.files, 'available'); assert.equal(healthData.database, 'available'); assert.equal(healthData.cloudflare, 'active')
+    const deployments = await request('/dashboard/api/deployments', { headers: { Cookie } })
+    assert.equal(deployments.status, 200, await deployments.clone().text())
+    assert.deepEqual((await deployments.json()).deployments[0].versions, [{ id: 'runtime-version', percentage: 100 }])
+    cloudflareRedirect = true
+    const beforeRedirect = cloudflareRequests
+    const redirected = await request('/dashboard/api/deployments', { headers: { Cookie } })
+    assert.equal(redirected.status, 502)
+    assert.equal((await redirected.json()).code, 'CLOUDFLARE_UPSTREAM_FAILED')
+    assert.equal(cloudflareRequests, beforeRedirect + 1)
+    cloudflareRedirect = false
     const other = cookie(await createSession(env, { login: 'other', name: 'Other', avatarUrl: '', accessToken: 'other-test-token' }))
     assert.equal((await request('/dashboard/api/files/uploads', { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: '{}' })).status, 401)
     const makeTicket = async (name: string, size: number) => {

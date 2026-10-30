@@ -56,7 +56,7 @@ export function registerGitHubTools(server: McpServer, client: Octokit, env: Env
       if (url.protocol !== 'https:' || url.username || url.password || url.port || !/^(?:[a-z0-9-]+\.)+(?:blob\.core\.windows\.net|actions\.githubusercontent\.com)$/.test(url.hostname)) throw new Error('GitHub returned an unsupported log storage hostname.')
       void response.body?.cancel().catch(() => {})
       // Credential containment: never forward GitHub Authorization to signed storage URLs.
-      logs = await fetch(url.href, { redirect: 'error', signal, headers: { Range: 'bytes=0-1048575' } })
+      logs = await fetch(url.href, { redirect: 'manual', signal, headers: { Range: 'bytes=0-1048575' } })
     }
     if (!logs.ok) { void logs.body?.cancel().catch(() => {}); throw new Error(`GitHub logs unavailable (${logs.status}); check Actions read permission and retention.`) }
     // Range is requested at the trusted storage endpoint; readFileBytes also enforces
