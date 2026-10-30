@@ -338,9 +338,25 @@ test('GitHub log downloads never forward OAuth to storage and redact reflected a
   assert.ok(!response.isError)
   assert.equal(new Headers(calls[0].options.headers).get('Authorization'), 'Bearer private-github-token')
   assert.equal(new Headers(calls[1].options.headers).has('Authorization'), false)
-  assert.equal(calls[1].options.redirect, 'error')
+  assert.equal(calls[1].options.redirect, 'manual')
   assert.ok(!JSON.stringify(response).includes('private-github-token'))
   assert.ok(!JSON.stringify(response).includes('private-cloudflare-token'))
+})
+
+test('GitHub log storage redirects are rejected without following a second destination', async t => {
+  let calls = 0
+  t.mock.method(globalThis, 'fetch', async (_url: string, options: RequestInit) => {
+    calls++
+    assert.equal(options.redirect, 'manual')
+    return new Response(null, { status: 302, headers: { Location: calls === 1
+      ? 'https://logs.blob.core.windows.net/run/job.txt?sig=temporary'
+      : 'https://untrusted.example/logs' } })
+  })
+  const { tools } = await setup()
+  const response = await tools.get('get_workflow_job_logs').handler({ owner: 'owner', repo: 'repo', job_id: 10 })
+  assert.equal(response.isError, true)
+  assert.match(JSON.stringify(response), /GitHub logs unavailable \(302\)/)
+  assert.equal(calls, 2)
 })
 
 test('binary rename reuses the original blob and cannot overwrite an existing destination', async () => {

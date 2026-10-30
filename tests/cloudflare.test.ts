@@ -75,7 +75,7 @@ test('R2 admin binary reads are lossless and bounded; reserved private keys cann
 test('Cloudflare retries transient safe reads at most once and never replays writes', async t => {
   let calls = 0
   t.mock.method(globalThis, 'fetch', async (_url: string, options: RequestInit) => {
-    calls++; assert.ok(options.signal); assert.equal(options.redirect, 'error')
+    calls++; assert.ok(options.signal); assert.equal(options.redirect, 'manual')
     return Response.json({ success: false, errors: [{ message: 'unavailable' }] }, { status: 503 })
   })
   await assert.rejects(listPagesProjects(env))
@@ -83,6 +83,31 @@ test('Cloudflare retries transient safe reads at most once and never replays wri
   calls = 0
   await assert.rejects(triggerPagesDeployment(env, 'project', 'staging'))
   assert.equal(calls, 1)
+})
+
+test('Cloudflare probes work with Workers redirect modes and refuse redirects before following credentials', async t => {
+  let status = 200, calls = 0, retry = false
+  t.mock.method(globalThis, 'fetch', async (_url: string, options: RequestInit) => {
+    calls++
+    // Workers throws before sending requests with redirect: error.
+    assert.equal(options.redirect, 'manual')
+    if (retry && calls === 1) return new Response('unavailable', { status: 503 })
+    if (status >= 300) return new Response('redirected', { status, headers: { Location: 'https://untrusted.example/token' } })
+    return Response.json({ success: true, result: { status: 'active', deployments: [{ id: 'deployment', versions: [{ version_id: 'version', percentage: 100 }] }] } })
+  })
+  assert.equal((await verifyCloudflareToken(env, 'user')).status, 'active')
+  assert.equal((await cloudflare.getWorkerDeployments(env, 'worker')).deployments[0].id, 'deployment')
+  for (const redirect of [301, 302, 303, 307, 308]) {
+    status = redirect
+    for (const probe of [() => verifyCloudflareToken(env, 'user'), () => listPagesProjects(env), () => triggerPagesDeployment(env, 'project')]) {
+      calls = 0
+      await assert.rejects(probe(), (error: unknown) => error instanceof Error && error.name === 'CloudflareApiError' && /redirect refused/.test(error.message))
+      assert.equal(calls, 1)
+    }
+  }
+  retry = true; calls = 0
+  await assert.rejects(listPagesProjects(env), /redirect refused/)
+  assert.equal(calls, 2)
 })
 
 
